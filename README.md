@@ -12,6 +12,14 @@ ZeroAd is a high-performance, serverless adblocker designed to run natively on *
 - **Multiple List Support**: Supports AdGuard and uBlock Origin syntax (`||domain^`, `@@||domain^`, etc.) with full whitelisting and prioritization.
 - **Large Capacity**: Manages up to 90,000 domains (90 Gateway lists of 1,000 items each).
 
+## Screenshots
+
+### Control Center Dashboard
+![Dashboard](docs/images/Dashboard.PNG)
+
+### Dynamic Settings
+![Settings](docs/images/Settings.PNG)
+
 ## Access Control & Security
 
 Since this worker provides a web-based dashboard and settings page that can modify your Cloudflare account configuration, it is **highly recommended** to protect it:
@@ -85,3 +93,7 @@ Since the Cloudflare Workers Free Plan has a **10ms CPU limit** and a **50-subre
 ## License
 
 This project is licensed under the **GNU Affero General Public License v3 (AGPL v3)**. See the [LICENSE](LICENSE) file for the full license text.
+
+## Did this save your day?
+
+[![Wanna say thanks?](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://www.paypal.me/lepikj)

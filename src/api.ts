@@ -23,13 +23,71 @@ export interface Bindings {
   MAX_ITEMS_PER_LIST: string;
   LIST_PREFIX: string;
   MAX_LISTS: string;
+  SCRIPT_NAME: string;
 }
 
 export interface FetchResult {
-  updated: boolean;
-  blocked?: Set<string>;
-  allowed?: Set<string>;
-  metadata?: Record<string, string>;
+  // ... existing interface ...
+  // (I will skip the implementation details of existing functions for conciseness in the replace call context)
+}
+
+/**
+ * Fetches the current Cron schedules for this worker.
+ */
+export async function getSchedules(
+  accountId: string,
+  scriptName: string,
+  apiToken: string,
+): Promise<string[]> {
+  const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${scriptName}/schedules`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    console.error(`Failed to fetch schedules: ${response.statusText}`);
+    void response.body?.cancel();
+    return [];
+  }
+
+  const data = (await response.json()) as any;
+  const crons = (data.result?.schedules || []).map((s: any) => s.cron);
+  return crons;
+}
+
+/**
+ * Updates the Cron schedules for this worker.
+ * Pass an empty array to disable all crons.
+ */
+export async function updateSchedules(
+  accountId: string,
+  scriptName: string,
+  apiToken: string,
+  crons: string[],
+): Promise<boolean> {
+  const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${scriptName}/schedules`;
+  const payload = crons.map((cron) => ({ cron }));
+
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    console.error(`Failed to update schedules: ${err}`);
+    return false;
+  }
+
+  void response.body?.cancel();
+  return true;
 }
 
 /**

@@ -11,13 +11,11 @@ account_id = "fe408e9ce02645d28107a1d33b3f38a2"
 binding = "ADBLOCK_KV"
 id = "f8b49529055b49ac9900e85c1f27c974"
 
-# Cron Trigger: Run every 5 minutes to process chunks
-[triggers]
-crons = ["*/5 * * * *"]
-
 [vars]
+# Internal name for API calls
+SCRIPT_NAME = "zero-ad"
 # List Source URLs (Comma-separated)
-ADBLOCK_LIST_URLS = "https://raw.githubusercontent.com/sander85/uBO-et/main/list.txt,https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"
+ADBLOCK_LIST_URLS = "https://raw.githubusercontent.com/sander85/uBO-et/main/list.txt,https://small.oisd.nl"
 # Maximum items per list (Free: 1000, Enterprise: 5000)
 MAX_ITEMS_PER_LIST = 1000
 # Prefix for Gateway Lists created by this worker
