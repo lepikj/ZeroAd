@@ -14,6 +14,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+
 export interface Bindings {
   ADBLOCK_KV: KVNamespace;
   CLOUDFLARE_API_TOKEN: string;
@@ -23,20 +24,26 @@ export interface Bindings {
   LIST_PREFIX: string;
   MAX_LISTS: string;
 }
+
 export interface FetchResult {
   updated: boolean;
   blocked?: Set<string>;
   allowed?: Set<string>;
   metadata?: Record<string, string>;
 }
+
+/**
+ * Fetches and parses the configured blocklists.
+ * Uses HEAD requests to check ETags/Last-Modified headers first.
+ */
 export async function fetchAdBlockList(
   urls: string[],
   currentMetadata: Record<string, string> = {},
 ): Promise<FetchResult> {
   const newMetadata: Record<string, string> = {};
   let anyChanged = false;
+
   // Step 1: Check Headers (ETag/Last-Modified) using HEAD requests
-  // This is extremely fast and saves CPU/Bandwidth
   console.log("Checking source headers for changes...");
   for (const url of urls) {
     try {
@@ -46,6 +53,7 @@ export async function fetchAdBlockList(
         response.headers.get("last-modified") ||
         "no-version";
       newMetadata[url] = etag;
+
       if (currentMetadata[url] !== etag) {
         anyChanged = true;
       }
@@ -54,13 +62,16 @@ export async function fetchAdBlockList(
       anyChanged = true;
     }
   }
+
   // If nothing changed and the URL list is the same length, we can skip
   if (!anyChanged && Object.keys(currentMetadata).length === urls.length) {
     return { updated: false };
   }
+
   // Step 2: Something changed, fetch and parse everything
   const blocked = new Set<string>();
   const allowed = new Set<string>();
+
   for (const url of urls) {
     console.log(`Fetching and parsing: ${url}`);
     try {
@@ -69,8 +80,10 @@ export async function fetchAdBlockList(
         console.error(`Failed to fetch ${url}: ${response.statusText}`);
         continue;
       }
+
       const text = await response.text();
       const lines = text.split("\n");
+
       for (let line of lines) {
         line = line.trim();
         if (
@@ -79,18 +92,23 @@ export async function fetchAdBlockList(
           line.startsWith("#") ||
           line.startsWith("[") ||
           line.startsWith("!#")
-        )
+        ) {
           continue;
+        }
+
         // Skip cosmetic filters and complex uBO syntax
         if (
           line.includes("##") ||
           line.includes("#@#") ||
           line.includes("#$#") ||
           line.includes("#?#")
-        )
+        ) {
           continue;
+        }
+
         let domain = "";
         let isAllowed = false;
+
         if (line.startsWith("@@||")) {
           isAllowed = true;
           domain = line.substring(4);
@@ -109,22 +127,29 @@ export async function fetchAdBlockList(
           // Pure domain name line
           domain = line;
         }
+
         if (domain) {
           // Clean up domain
           const optionsIndex = domain.indexOf("$");
           if (optionsIndex !== -1) domain = domain.substring(0, optionsIndex);
-          if (domain.endsWith("^"))
+
+          if (domain.endsWith("^")) {
             domain = domain.substring(0, domain.length - 1);
+          }
+
           // Remove trailing dots
           while (domain.endsWith(".")) {
             domain = domain.substring(0, domain.length - 1);
           }
+
           domain = domain.toLowerCase().trim();
+
           // Final validation
-          // 1. MUST NOT be an IP address or partial IP (Cloudflare DOMAIN lists reject them)
+          // 1. MUST NOT be an IP address or partial IP
           const isAllNumAndDots = /^[0-9.]+$/.test(domain);
           const isValidIPv4 = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(domain);
-          // 2. Basic domain structure: at least one label, no empty labels, no labels > 63 chars
+
+          // 2. Basic domain structure
           const labels = domain.split(".");
           const hasInvalidLabel = labels.some(
             (l) =>
@@ -133,18 +158,17 @@ export async function fetchAdBlockList(
               !/^[a-z0-9-]/.test(l) ||
               !/[a-z0-9]$/.test(l),
           );
+
           if (
             domain &&
             !domain.includes("/") &&
             !domain.includes("*") &&
             !hasInvalidLabel
           ) {
-            // Reject if it's just numbers and dots but NOT a valid IP (like 158.247.208)
-            // Or if it IS a valid IP (Cloudflare wants IP type for those)
             if (isAllNumAndDots && !isValidIPv4) {
               // Skip partial IPs
             } else if (isValidIPv4) {
-              // Skip full IPs (require IP list type)
+              // Skip full IPs
             } else {
               if (isAllowed) {
                 allowed.add(domain);
@@ -159,6 +183,7 @@ export async function fetchAdBlockList(
       console.error(`Error processing ${url}: ${e.message}`);
     }
   }
+
   return {
     updated: true,
     blocked,
@@ -166,6 +191,10 @@ export async function fetchAdBlockList(
     metadata: newMetadata,
   };
 }
+
+/**
+ * Retrieves all DOMAIN type Gateway lists from the account.
+ */
 export async function getGatewayLists(
   accountId: string,
   apiToken: string,
@@ -177,25 +206,32 @@ export async function getGatewayLists(
       "Content-Type": "application/json",
     },
   });
+
   if (!response.ok) {
     console.error(`Failed to list Gateway lists: ${response.statusText}`);
     void response.body?.cancel();
     return [];
   }
+
   const data = (await response.json()) as any;
   return data.result || [];
 }
+
+/**
+ * Creates or replaces a Gateway list.
+ * Optimization: Pass existingId to skip the lookup subrequest.
+ */
 export async function createOrUpdateGatewayList(
   accountId: string,
   apiToken: string,
   listName: string,
   items: string[],
-  existingId?: string, // Optimization: pass ID if known to skip fetch
+  existingId?: string,
 ): Promise<string | null> {
   const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/gateway/lists`;
   const payload = items.map((item) => ({ value: item }));
   let targetId = existingId;
-  // If ID not provided, we must look it up (1 extra subrequest)
+
   if (!targetId) {
     const existingResponse = await fetch(`${baseUrl}?type=DOMAIN`, {
       headers: {
@@ -203,6 +239,7 @@ export async function createOrUpdateGatewayList(
         "Content-Type": "application/json",
       },
     });
+
     if (!existingResponse.ok) {
       console.error(
         `Failed to list Gateway lists: ${existingResponse.statusText}`,
@@ -210,6 +247,7 @@ export async function createOrUpdateGatewayList(
       void existingResponse.body?.cancel();
       return null;
     }
+
     const existingData = (await existingResponse.json()) as any;
     const existingList = existingData.result.find(
       (l: any) => l.name === listName,
@@ -218,8 +256,8 @@ export async function createOrUpdateGatewayList(
       targetId = existingList.id;
     }
   }
+
   if (targetId) {
-    // Update existing list
     const updateUrl = `${baseUrl}/${targetId}`;
     const updateResponse = await fetch(updateUrl, {
       method: "PUT",
@@ -233,15 +271,16 @@ export async function createOrUpdateGatewayList(
         items: payload,
       }),
     });
+
     if (!updateResponse.ok) {
       const err = await updateResponse.text();
       console.error(`Failed to update list ${listName}: ${err}`);
       return null;
     }
+
     void updateResponse.body?.cancel();
     return targetId;
   } else {
-    // Create new list
     const createResponse = await fetch(baseUrl, {
       method: "POST",
       headers: {
@@ -254,15 +293,21 @@ export async function createOrUpdateGatewayList(
         items: payload,
       }),
     });
+
     if (!createResponse.ok) {
       const err = await createResponse.text();
       console.error(`Failed to create list ${listName}: ${err}`);
       return null;
     }
+
     const data = (await createResponse.json()) as any;
     return data.result.id;
   }
 }
+
+/**
+ * Updates the Gateway Firewall Rule to reference the provided list IDs.
+ */
 export async function updateGatewayPolicy(
   accountId: string,
   apiToken: string,
@@ -270,23 +315,22 @@ export async function updateGatewayPolicy(
   listIds: string[],
 ) {
   const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/gateway/rules`;
-  // Construct traffic expression: "dns.content_category in { ... } or dns.domain in $list_id ..."
-  // For lists, it is `any(dns.domains[*] in $list_id)`
-  // Syntax: any(dns.domains[*] in $list_id_1) or any(dns.domains[*] in $list_id_2) ...
   const expression = listIds
     .map((id) => `any(dns.domains[*] in $${id})`)
     .join(" or ");
-  // Fetch existing rules to find the one to update
+
   const rulesResponse = await fetch(baseUrl, {
     headers: {
       Authorization: `Bearer ${apiToken}`,
       "Content-Type": "application/json",
     },
   });
+
   if (!rulesResponse.ok) {
     void rulesResponse.body?.cancel();
     throw new Error(`Failed to fetch rules: ${rulesResponse.statusText}`);
   }
+
   const rulesData = (await rulesResponse.json()) as any;
   const existingRule = rulesData.result.find((r: any) => r.name === policyName);
   const rulePayload = {
@@ -297,6 +341,7 @@ export async function updateGatewayPolicy(
     filters: ["dns"],
     traffic: expression,
   };
+
   if (existingRule) {
     const updateUrl = `${baseUrl}/${existingRule.id}`;
     const updateRes = await fetch(updateUrl, {
@@ -307,6 +352,7 @@ export async function updateGatewayPolicy(
       },
       body: JSON.stringify(rulePayload),
     });
+
     if (!updateRes.ok) {
       const err = await updateRes.text();
       throw new Error(`Failed to update policy: ${err}`);
@@ -321,6 +367,7 @@ export async function updateGatewayPolicy(
       },
       body: JSON.stringify(rulePayload),
     });
+
     if (!createRes.ok) {
       const err = await createRes.text();
       throw new Error(`Failed to create policy: ${err}`);
@@ -328,6 +375,10 @@ export async function updateGatewayPolicy(
     void createRes.body?.cancel();
   }
 }
+
+/**
+ * Deletes a Gateway list by ID.
+ */
 export async function deleteGatewayList(
   accountId: string,
   apiToken: string,
@@ -341,11 +392,13 @@ export async function deleteGatewayList(
       "Content-Type": "application/json",
     },
   });
+
   if (!response.ok) {
     console.error(`Failed to delete list ${listId}: ${response.statusText}`);
     void response.body?.cancel();
     return false;
   }
+
   void response.body?.cancel();
   return true;
 }
