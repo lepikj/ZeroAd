@@ -34,7 +34,7 @@ const KV_KEY_HEARTBEAT = "last_heartbeat";
 
 // Processing Constants
 const BATCH_SIZE = 5;
-const CHUNK_PREFIX = "AdBlock_Worker_"; // Should match LIST_PREFIX if defined
+const CHUNK_PREFIX = "AdBlock_Worker_";
 
 /**
  * Phase 1: Download blocklists and process them into chunks.
@@ -66,7 +66,7 @@ async function handleDownloading(env: Bindings, forceUpdate: boolean = false) {
 
     const { blocked, allowed, metadata } = result;
     console.log(
-      `Changes detected. Processing ${blocked!.size} blocked domains and ${allowed!.size} allowed domains.`,
+      `Changes detected. Processing ${blocked!.size} blocked domains and ${allowed!.size} allowed domains.`, 
     );
 
     for (const domain of allowed!) {
@@ -316,6 +316,34 @@ export default {
         ? new Date(parseInt(lastRun)).toLocaleString()
         : "Never";
 
+      const urls = env.ADBLOCK_LIST_URLS.split(",")
+        .map((u) => u.trim())
+        .filter((u) => u);
+
+      // Live HEAD check for updates
+      const sourceStatuses = await Promise.all(
+        urls.map(async (url) => {
+          try {
+            const res = await fetch(url, { method: "HEAD" });
+            const currentEtag =
+              res.headers.get("etag") ||
+              res.headers.get("last-modified") ||
+              "unknown";
+            const storedEtag = metadata[url];
+            const hasUpdate = storedEtag && storedEtag !== currentEtag;
+            const name = url.split("/").pop() || url;
+            return { url, name, hasUpdate, currentEtag, storedEtag };
+          } catch (e) {
+            return {
+              url,
+              name: url.split("/").pop() || url,
+              error: true,
+              currentEtag: "error",
+            };
+          }
+        }),
+      );
+
       const html = `
         <!DOCTYPE html>
         <html>
@@ -323,77 +351,97 @@ export default {
           <meta charset="utf-8">
           <title>ZeroAd Control Center</title>
           <style>
-            body { background: #121212; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 40px; line-height: 1.6; max-width: 800px; margin: 0 auto; }
+            body { background: #121212; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 40px; line-height: 1.6; max-width: 900px; margin: 0 auto; }
             h1 { color: #64b5f6; border-bottom: 1px solid #333; padding-bottom: 10px; }
-            .card { background: #1e1e1e; border: 1px solid #333; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-            .stat { margin-bottom: 10px; }
-            .label { color: #9e9e9e; font-weight: bold; }
+            .card { background: #1e1e1e; border: 1px solid #333; padding: 25px; border-radius: 12px; margin-bottom: 30px; }
+            .stat { margin-bottom: 12px; font-size: 16px; }
+            .label { color: #9e9e9e; font-weight: bold; min-width: 150px; display: inline-block; }
             .value { color: #81c784; }
-            .status-value { color: #64b5f6; font-weight: bold; text-transform: uppercase; }
-            .btn { display: inline-block; padding: 10px 20px; margin-right: 10px; margin-bottom: 10px; border-radius: 4px; text-decoration: none; font-weight: bold; cursor: pointer; transition: opacity 0.2s; border: none; }
+            .status-value { color: #64b5f6; font-weight: bold; text-transform: uppercase; background: rgba(100, 181, 246, 0.1); padding: 2px 8px; border-radius: 4px; }
+            .btn { display: inline-block; padding: 12px 24px; margin-right: 15px; margin-bottom: 15px; border-radius: 6px; text-decoration: none; font-weight: bold; cursor: pointer; transition: all 0.2s; border: none; }
             .btn-primary { background: #64b5f6; color: #121212; }
             .btn-secondary { background: #4db6ac; color: #121212; }
-            .btn-danger { background: #ef5350; color: #121212; }
-            .btn:hover { opacity: 0.8; }
-            pre { background: #000; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; border: 1px solid #222; }
-            .meta-section { margin-top: 20px; }
-            a.json-link { color: #9e9e9e; font-size: 12px; text-decoration: underline; }
+            .btn-danger { background: transparent; color: #ef5350; border: 1px solid #ef5350; }
+            .btn:hover { opacity: 0.8; transform: translateY(-1px); }
+            
+            .source-table { width: 100%; border-collapse: collapse; margin-top: 10px; background: #181818; border-radius: 8px; overflow: hidden; }
+            .source-table th, .source-table td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #222; }
+            .source-table th { background: #222; color: #9e9e9e; font-size: 12px; text-transform: uppercase; }
+            .badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; border: 1px solid; }
+            .badge-ok { background: rgba(129, 199, 132, 0.1); color: #81c784; border-color: #81c784; }
+            .badge-update { background: rgba(255, 183, 77, 0.1); color: #ffb74d; border-color: #ffb74d; }
+            .badge-new { background: rgba(100, 181, 246, 0.1); color: #64b5f6; border-color: #64b5f6; }
+            .etag { font-size: 11px; color: #666; font-family: monospace; }
           </style>
         </head>
         <body>
           <h1>🛡️ ZeroAd Control Center</h1>
+          
           <div class="card">
-            <div class="stat"><span class="label">Current Status:</span> <span class="status-value">${status}</span></div>
+            <div class="stat"><span class="label">Work Status:</span> <span class="status-value">${status}</span></div>
             <div class="stat"><span class="label">Last Sync:</span> <span class="value">${lastRunDate}</span></div>
-            <div class="stat"><span class="label">Gateway Lists:</span> <span class="value">${lists.length} registered</span></div>
+            <div class="stat"><span class="label">Active Lists:</span> <span class="value">${lists.length} registered</span></div>
             ${meta ? `<div class="stat"><span class="label">Sync Progress:</span> <span class="value">${meta.current} / ${meta.total} chunks</span></div>` : ""}
           </div>
-                    <div class="actions">
-                      <div style="margin-bottom: 20px; font-size: 14px; user-select: none;">
-                        <label style="cursor: pointer; color: #ffb74d;">
-                          <input type="checkbox" id="force-toggle" style="vertical-align: middle;"> 
-                          Force Refresh Source Lists (Ignore ETags)
-                        </label>
-                      </div>
-                      <a href="/stream" id="btn-stream" class="btn btn-primary">🚀 Run Full Sync Dashboard</a>
-                      <a href="/run" id="btn-run" class="btn btn-secondary">⏯️ Run Next Batch</a>
-                      <a href="/reset" class="btn btn-danger" onclick="return confirm('Are you sure you want to reset the state?')">⚠️ Reset State</a>
-                    </div>
-          
-                    <div class="meta-section">
-                      <div class="label">Source Metadata:</div>
-                      <pre>${JSON.stringify(metadata, null, 2)}</pre>
-                    </div>
-          
-                    <div style="margin-top: 40px; text-align: right;">
-                      <a href="/status.json" class="json-link">View Raw JSON Status</a>
-                    </div>
-          
-                    <script>
-                      const toggle = document.getElementById('force-toggle');
-                      const streamBtn = document.getElementById('btn-stream');
-                      const runBtn = document.getElementById('btn-run');
-          
-                      toggle.addEventListener('change', () => {
-                        const isForce = toggle.checked;
-                        streamBtn.href = isForce ? '/stream?force=true' : '/stream';
-                        runBtn.href = isForce ? '/run?force=true' : '/run';
-                        
-                        if (isForce) {
-                          streamBtn.innerHTML = '🔥 Run Full Sync (Forced)';
-                          streamBtn.style.background = '#ffb74d';
-                        } else {
-                          streamBtn.innerHTML = '🚀 Run Full Sync Dashboard';
-                          streamBtn.style.background = '#64b5f6';
-                        }
-                      });
-                    </script>
-                  </body>
-                  </html>
-                `;
-      return new Response(html, {
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-      });
+
+          <div class="card">
+            <div class="label" style="margin-bottom: 15px; display: block; font-size: 18px; color: #e0e0e0;">Source Blocklists</div>
+            <table class="source-table">
+              <thead><tr><th>List Name</th><th>Status</th><th>Stored</th><th>Current</th></tr></thead>
+              <tbody>
+                ${sourceStatuses
+                  .map((s) => {
+                    let badge = s.error
+                      ? '<span class="badge badge-update">ERROR</span>'
+                      : !s.storedEtag
+                        ? '<span class="badge badge-new">NEW</span>'
+                        : s.hasUpdate
+                          ? '<span class="badge badge-update">UPDATE AVAILABLE</span>'
+                          : '<span class="badge badge-ok">CURRENT</span>';
+                    return `<tr>
+                      <td><div style="font-weight: bold; color: #64b5f6;">${s.name}</div></td>
+                      <td>${badge}</td>
+                      <td><span class="etag">${s.storedEtag || "None"}</span></td>
+                      <td><span class="etag">${s.currentEtag}</span></td>
+                    </tr>`;
+                  })
+                  .join("")}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="actions">
+            <div style="margin-bottom: 20px; font-size: 14px; user-select: none; background: #1a1a1a; padding: 10px; border-radius: 8px;">
+              <label style="cursor: pointer; color: #ffb74d;">
+                <input type="checkbox" id="force-toggle"> Force Refresh Source Lists (Ignore ETags)
+              </label>
+            </div>
+            <a href="/stream" id="btn-stream" class="btn btn-primary">🚀 Run Full Sync Dashboard</a>
+            <a href="/run" id="btn-run" class="btn btn-secondary">⏯️ Run Next Batch</a>
+            <a href="/reset" class="btn btn-danger" onclick="return confirm('Wipe all progress?')">⚠️ Reset State</a>
+          </div>
+
+          <script>
+            const toggle = document.getElementById('force-toggle');
+            const streamBtn = document.getElementById('btn-stream');
+            const runBtn = document.getElementById('btn-run');
+            toggle.addEventListener('change', () => {
+              const isForce = toggle.checked;
+              streamBtn.href = isForce ? '/stream?force=true' : '/stream';
+              runBtn.href = isForce ? '/run?force=true' : '/run';
+              if (isForce) {
+                streamBtn.innerHTML = '🔥 Run Full Sync (Forced)';
+                streamBtn.style.background = '#ffb74d';
+              } else {
+                streamBtn.innerHTML = '🚀 Run Full Sync Dashboard';
+                streamBtn.style.background = '#64b5f6';
+              }
+            });
+          </script>
+        </body>
+        </html>
+      `;
+      return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
     // --- JSON Status ---
@@ -404,17 +452,13 @@ export default {
       const metadata = await env.ADBLOCK_KV.get(KV_KEY_METADATA);
       const lastRun = await env.ADBLOCK_KV.get(KV_KEY_LAST_RUN);
       return new Response(
-        JSON.stringify(
-          {
-            status,
-            meta: meta ? JSON.parse(meta) : null,
-            lists_count: lists ? JSON.parse(lists).length : 0,
-            last_run: lastRun,
-            sources: metadata ? JSON.parse(metadata) : {},
-          },
-          null,
-          2,
-        ),
+        JSON.stringify({
+          status,
+          meta: meta ? JSON.parse(meta) : null,
+          lists_count: lists ? JSON.parse(lists).length : 0,
+          last_run: lastRun,
+          sources: metadata ? JSON.parse(metadata) : {},
+        }, null, 2),
         { headers: { "Content-Type": "application/json" } },
       );
     }
@@ -426,17 +470,13 @@ export default {
       const encoder = new TextEncoder();
       const force = url.searchParams.get("force") === "true";
       const write = async (msg: string, className: string = "") => {
-        const div = className
-          ? `<div class="${className}">${msg}</div>`
-          : `<div>${msg}</div>`;
+        const div = className ? `<div class="${className}">${msg}</div>` : `<div>${msg}</div>`;
         await writer.write(encoder.encode(div + "\n"));
       };
 
-      ctx.waitUntil(
-        (async () => {
-          try {
-            await writer.write(
-              encoder.encode(`
+      ctx.waitUntil((async () => {
+        try {
+          await writer.write(encoder.encode(`
             <!DOCTYPE html>
             <html>
             <head>
@@ -454,8 +494,6 @@ export default {
                 .error { color: #ef5350; font-weight: bold; }
                 .success { color: #4db6ac; font-weight: bold; text-decoration: underline; }
                 .meta { color: #9e9e9e; font-style: italic; }
-                a { color: #64b5f6; text-decoration: none; border-bottom: 1px dashed; }
-                a:hover { border-bottom: 1px solid; }
                 hr { border: 0; border-top: 1px solid #333; margin: 20px 0; }
               </style>
               <script>
@@ -476,117 +514,84 @@ export default {
               <progress id="sync-progress" value="0" max="100"></progress>
             </div>
             <!-- 1KB Padding: ${" ".repeat(1024)} -->
-          `),
-            );
+          `));
 
-            await write(
-              `🚀 Starting stream processing... (Force: ${force})`,
-              "info",
-            );
-            const lists = await getGatewayLists(
-              env.CLOUDFLARE_ACCOUNT_ID,
-              env.CLOUDFLARE_API_TOKEN,
-            );
-            const existingMap: Record<string, string> = {};
-            lists.forEach((l: any) => (existingMap[l.name] = l.id));
+          await write(`🚀 Starting stream processing... (Force: ${force})`, "info");
+          const lists = await getGatewayLists(env.CLOUDFLARE_ACCOUNT_ID, env.CLOUDFLARE_API_TOKEN);
+          const existingMap: Record<string, string> = {};
+          lists.forEach((l: any) => (existingMap[l.name] = l.id));
 
-            let subrequestCount = 1;
-            const SUBREQUEST_LIMIT = 40;
-            let status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
-            let cachedDomains: string[] | undefined;
+          let subrequestCount = 1;
+          const SUBREQUEST_LIMIT = 40;
+          let status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
+          let cachedDomains: string[] | undefined;
 
-            while (subrequestCount < SUBREQUEST_LIMIT) {
-              status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
-              subrequestCount++;
-              await write(
-                `📍 Phase: <span class="status">${status}</span> <span class="meta">(${subrequestCount}/${SUBREQUEST_LIMIT})</span>`,
-              );
+          while (subrequestCount < SUBREQUEST_LIMIT) {
+            status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
+            subrequestCount++;
+            await write(`📍 Phase: <span class="status">${status}</span> <span class="meta">(${subrequestCount}/${SUBREQUEST_LIMIT})</span>`);
 
-              if (status === "IDLE") {
-                await env.ADBLOCK_KV.put(KV_KEY_STATUS, "DOWNLOADING");
-                status = "DOWNLOADING";
-              }
+            if (status === "IDLE") {
+              await env.ADBLOCK_KV.put(KV_KEY_STATUS, "DOWNLOADING");
+              status = "DOWNLOADING";
+            }
 
-              if (status === "DOWNLOADING") {
-                await handleDownloading(env, force);
-                if ((await env.ADBLOCK_KV.get(KV_KEY_STATUS)) === "IDLE") {
-                  await write("✅ No changes. Stream ending.", "success");
-                  break;
-                }
-                const fullListStr = await env.ADBLOCK_KV.get("FULL_LIST");
-                if (fullListStr) cachedDomains = fullListStr.split("\n");
-                subrequestCount += 7;
-              } else if (status === "UPDATING_LISTS") {
-                if (!cachedDomains) {
-                  const fullListStr = await env.ADBLOCK_KV.get("FULL_LIST");
-                  if (fullListStr) cachedDomains = fullListStr.split("\n");
-                }
-                await handleUpdatingLists(env, cachedDomains, existingMap);
-                const metaStr = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
-                if (metaStr) {
-                  const m = JSON.parse(metaStr);
-                  await write(
-                    `📊 Progress: <b>${m.current}/${m.total}</b> updated.`,
-                    "meta",
-                  );
-                  await writer.write(
-                    encoder.encode(
-                      `<script>updateProgress(${m.current}, ${m.total})</script>`,
-                    ),
-                  );
-                }
-                subrequestCount += 8;
-              } else if (status === "UPDATING_POLICY") {
-                await handleUpdatingPolicy(env);
-                subrequestCount += 5;
-              } else if (status === "CLEANING_UP") {
-                await handleCleanup(env);
-                await write("✨ Cycle Complete!", "success");
+            if (status === "DOWNLOADING") {
+              await handleDownloading(env, force);
+              if ((await env.ADBLOCK_KV.get(KV_KEY_STATUS)) === "IDLE") {
+                await write("✅ No changes. Stream ending.", "success");
                 break;
               }
-              await new Promise((r) => setTimeout(r, 100));
+              const fullListStr = await env.ADBLOCK_KV.get("FULL_LIST");
+              if (fullListStr) cachedDomains = fullListStr.split("\n");
+              subrequestCount += 7;
+            } else if (status === "UPDATING_LISTS") {
+              if (!cachedDomains) {
+                const fullListStr = await env.ADBLOCK_KV.get("FULL_LIST");
+                if (fullListStr) cachedDomains = fullListStr.split("\n");
+              }
+              await handleUpdatingLists(env, cachedDomains, existingMap);
+              const metaStr = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
+              if (metaStr) {
+                const m = JSON.parse(metaStr);
+                await writer.write(encoder.encode(`<script>updateProgress(${m.current}, ${m.total})</script>`));
+              }
+              subrequestCount += 8;
+            } else if (status === "UPDATING_POLICY") {
+              await handleUpdatingPolicy(env);
+              subrequestCount += 5;
+            } else if (status === "CLEANING_UP") {
+              await handleCleanup(env);
+              await write("✨ Cycle Complete!", "success");
+              break;
             }
-
-            if (subrequestCount >= SUBREQUEST_LIMIT) {
-              const reloadUrl = new URL(request.url);
-              reloadUrl.searchParams.delete("force");
-              await write("<hr>⚠️ Limit reached. Auto-reloading...", "warn");
-              await writer.write(
-                encoder.encode(
-                  `<script>setTimeout(() => { window.location.href = "${reloadUrl.toString()}"; }, 2000);</script>`,
-                ),
-              );
-            }
-            await writer.write(encoder.encode("</body></html>"));
-          } catch (e: any) {
-            await write(`❌ Error: ${e.message}`, "error");
-          } finally {
-            await writer.close();
+            await new Promise((r) => setTimeout(r, 100));
           }
-        })(),
-      );
 
-      return new Response(readable, {
-        headers: {
-          "Content-Type": "text/html; charset=utf-8",
-          "X-Content-Type-Options": "nosniff",
-        },
-      });
+          if (subrequestCount >= SUBREQUEST_LIMIT) {
+            const reloadUrl = new URL(request.url);
+            reloadUrl.searchParams.delete("force");
+            await write("<hr>⚠️ Limit reached. Auto-reloading...", "warn");
+            await writer.write(encoder.encode(`<script>setTimeout(() => { window.location.href = "${reloadUrl.toString()}"; }, 2000);</script>`));
+          }
+          await writer.write(encoder.encode("</body></html>"));
+        } catch (e: any) {
+          await write(`❌ Error: ${e.message}`, "error");
+        } finally {
+          await writer.close();
+        }
+      })());
+
+      return new Response(readable, { headers: { "Content-Type": "text/html; charset=utf-8", "X-Content-Type-Options": "nosniff" } });
     }
 
-    // --- Actions ---
     if (request.method === "GET" && path === "/run") {
       const status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
       if (status === "IDLE") {
         await env.ADBLOCK_KV.put(KV_KEY_STATUS, "DOWNLOADING");
-        ctx.waitUntil(
-          handleDownloading(env, url.searchParams.get("force") === "true"),
-        );
+        ctx.waitUntil(handleDownloading(env, url.searchParams.get("force") === "true"));
       } else if (status === "UPDATING_LISTS") {
-        const lists = await getGatewayLists(
-          env.CLOUDFLARE_ACCOUNT_ID,
-          env.CLOUDFLARE_API_TOKEN,
-        );
+        const lists = await getGatewayLists(env.CLOUDFLARE_ACCOUNT_ID, env.CLOUDFLARE_API_TOKEN);
         const existingMap: Record<string, string> = {};
         lists.forEach((l: any) => (existingMap[l.name] = l.id));
         ctx.waitUntil(handleUpdatingLists(env, undefined, existingMap));
