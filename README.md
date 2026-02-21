@@ -31,6 +31,16 @@ ZeroAd breaks the synchronization process into five distinct phases across multi
 4.  **UPDATING_POLICY**: Synchronizes the Gateway DNS policy with the current list IDs.
 5.  **CLEANING_UP**: Automatically deletes any legacy Gateway lists from previous runs that are no longer needed (e.g., if the total domain count decreased).
 
+### Cron Flow & State Machine
+
+Since the Cloudflare Workers Free Plan has a **10ms CPU limit** and a **50-subrequest limit** per invocation, ZeroAd uses a **State Machine** backed by **Workers KV** to handle large blocklists:
+
+-   **Persistence**: The current status, processed domain list, and sync progress are stored in KV.
+-   **Batching**: Instead of updating all 90 lists at once (which would exceed the subrequest limit), the worker updates **5 lists per 5-minute cron run**.
+-   **Smart Skip (ETags)**: Before starting a sync, the worker performs a lightweight `HEAD` request to check if the source lists have actually changed. If not, it skips the entire cycle, saving KV writes and API units.
+-   **Concurrency Protection (Heartbeat)**: To prevent the Cron trigger and a manual Dashboard sync from interfering with each other, the worker maintains a `last_heartbeat` in KV. If an active sync is detected within the last 2 minutes, the cron run is skipped.
+-   **Auto-Resumption**: If a worker execution is terminated by the platform, the state remains in KV. The next cron or dashboard load will automatically pick up from the last successful chunk.
+
 ## Setup
 
 1.  **Configure `wrangler.toml`**: Add your `account_id` and `ADBLOCK_KV` namespace ID.

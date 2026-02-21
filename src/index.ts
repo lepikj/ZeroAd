@@ -494,6 +494,8 @@ export default {
                 .error { color: #ef5350; font-weight: bold; }
                 .success { color: #4db6ac; font-weight: bold; text-decoration: underline; }
                 .meta { color: #9e9e9e; font-style: italic; }
+                .back-link { float: right; color: #64b5f6; text-decoration: none; font-size: 12px; margin-top: 5px; }
+                .back-link:hover { text-decoration: underline; }
                 hr { border: 0; border-top: 1px solid #333; margin: 20px 0; }
               </style>
               <script>
@@ -510,6 +512,7 @@ export default {
             </head>
             <body>
             <div id="progress-container">
+              <a href="/" class="back-link">← Back to Control Center</a>
               <div id="progress-text" style="margin-bottom: 5px; font-size: 12px; color: #9e9e9e;">Initializing...</div>
               <progress id="sync-progress" value="0" max="100"></progress>
             </div>
