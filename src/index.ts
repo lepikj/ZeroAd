@@ -22,6 +22,8 @@ import {
   createOrUpdateGatewayList,
   updateGatewayPolicy,
   deleteGatewayList,
+  getSchedules,
+  updateSchedules,
 } from "./api";
 
 // KV Key Constants
@@ -31,6 +33,7 @@ const KV_KEY_LIST_IDS = "list_ids";
 const KV_KEY_LAST_RUN = "last_run";
 const KV_KEY_METADATA = "source_metadata";
 const KV_KEY_HEARTBEAT = "last_heartbeat";
+const KV_KEY_CUSTOM_URLS = "config_urls";
 
 // Processing Constants
 const BATCH_SIZE = 5;
@@ -46,7 +49,12 @@ async function handleDownloading(env: Bindings, forceUpdate: boolean = false) {
   try {
     const metadataStr = await env.ADBLOCK_KV.get(KV_KEY_METADATA);
     const currentMetadata = metadataStr ? JSON.parse(metadataStr) : {};
-    const urls = env.ADBLOCK_LIST_URLS.split(",")
+
+    // Use KV override if exists, otherwise fallback to env
+    const rawUrls =
+      (await env.ADBLOCK_KV.get(KV_KEY_CUSTOM_URLS)) || env.ADBLOCK_LIST_URLS;
+    const urls = rawUrls
+      .split(",")
       .map((u) => u.trim())
       .filter((u) => u);
 
@@ -198,7 +206,7 @@ async function handleUpdatingPolicy(env: Bindings) {
     await updateGatewayPolicy(
       env.CLOUDFLARE_ACCOUNT_ID,
       env.CLOUDFLARE_API_TOKEN,
-      "Block Ads (Worker)",
+      "Block Ads (Managed by Worker)",
       listIds,
     );
     console.log("Policy updated successfully.");
@@ -302,7 +310,7 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // --- Control Center ---
+    // --- Dashboard ---
     if (request.method === "GET" && path === "/") {
       const status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
       const metaStr = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
@@ -316,54 +324,63 @@ export default {
         ? new Date(parseInt(lastRun)).toLocaleString()
         : "Never";
 
-      const urls = env.ADBLOCK_LIST_URLS.split(",")
+      const rawUrls =
+        (await env.ADBLOCK_KV.get(KV_KEY_CUSTOM_URLS)) || env.ADBLOCK_LIST_URLS;
+      const urls = rawUrls
+        .split(",")
         .map((u) => u.trim())
         .filter((u) => u);
 
-      // Live HEAD check for updates
-      const sourceStatuses = await Promise.all(
-        urls.map(async (url) => {
-          try {
-            const res = await fetch(url, { method: "HEAD" });
-            const currentEtag =
-              res.headers.get("etag") ||
-              res.headers.get("last-modified") ||
-              "unknown";
-            const storedEtag = metadata[url];
-            const hasUpdate = storedEtag && storedEtag !== currentEtag;
-            const name = url.split("/").pop() || url;
-            return { url, name, hasUpdate, currentEtag, storedEtag };
-          } catch (e) {
-            return {
-              url,
-              name: url.split("/").pop() || url,
-              error: true,
-              currentEtag: "error",
-            };
-          }
-        }),
-      );
+      // Fetch Live Status & Schedules
+      const [sourceStatuses, schedules] = await Promise.all([
+        Promise.all(
+          urls.map(async (url) => {
+            try {
+              const res = await fetch(url, { method: "HEAD" });
+              const currentEtag =
+                res.headers.get("etag") ||
+                res.headers.get("last-modified") ||
+                "unknown";
+              const storedEtag = metadata[url];
+              const hasUpdate = storedEtag && storedEtag !== currentEtag;
+              const name = url.split("/").pop() || url;
+              return { url, name, hasUpdate, currentEtag, storedEtag };
+            } catch (e) {
+              return {
+                url,
+                name: url.split("/").pop() || url,
+                error: true,
+                currentEtag: "error",
+              };
+            }
+          }),
+        ),
+        getSchedules(
+          env.CLOUDFLARE_ACCOUNT_ID,
+          env.SCRIPT_NAME,
+          env.CLOUDFLARE_API_TOKEN,
+        ),
+      ]);
 
       const html = `
         <!DOCTYPE html>
         <html>
         <head>
           <meta charset="utf-8">
-          <title>ZeroAd Control Center</title>
+          <title>ZeroAd Dashboard</title>
           <style>
             body { background: #121212; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 40px; line-height: 1.6; max-width: 900px; margin: 0 auto; }
-            h1 { color: #64b5f6; border-bottom: 1px solid #333; padding-bottom: 10px; }
+            h1 { color: #64b5f6; border-bottom: 1px solid #333; padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
             .card { background: #1e1e1e; border: 1px solid #333; padding: 25px; border-radius: 12px; margin-bottom: 30px; }
             .stat { margin-bottom: 12px; font-size: 16px; }
             .label { color: #9e9e9e; font-weight: bold; min-width: 150px; display: inline-block; }
             .value { color: #81c784; }
             .status-value { color: #64b5f6; font-weight: bold; text-transform: uppercase; background: rgba(100, 181, 246, 0.1); padding: 2px 8px; border-radius: 4px; }
-            .btn { display: inline-block; padding: 12px 24px; margin-right: 15px; margin-bottom: 15px; border-radius: 6px; text-decoration: none; font-weight: bold; cursor: pointer; transition: all 0.2s; border: none; }
+            .btn { display: inline-block; padding: 12px 24px; margin-right: 15px; margin-bottom: 15px; border-radius: 6px; text-decoration: none; font-weight: bold; cursor: pointer; transition: all 0.2s; border: none; font-size: 14px; }
             .btn-primary { background: #64b5f6; color: #121212; }
             .btn-secondary { background: #4db6ac; color: #121212; }
             .btn-danger { background: transparent; color: #ef5350; border: 1px solid #ef5350; }
             .btn:hover { opacity: 0.8; transform: translateY(-1px); }
-            
             .source-table { width: 100%; border-collapse: collapse; margin-top: 10px; background: #181818; border-radius: 8px; overflow: hidden; }
             .source-table th, .source-table td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #222; }
             .source-table th { background: #222; color: #9e9e9e; font-size: 12px; text-transform: uppercase; }
@@ -372,16 +389,22 @@ export default {
             .badge-update { background: rgba(255, 183, 77, 0.1); color: #ffb74d; border-color: #ffb74d; }
             .badge-new { background: rgba(100, 181, 246, 0.1); color: #64b5f6; border-color: #64b5f6; }
             .etag { font-size: 11px; color: #666; font-family: monospace; }
+            .settings-link { font-size: 14px; color: #9e9e9e; text-decoration: none; border: 1px solid #333; padding: 5px 15px; border-radius: 20px; }
+            .settings-link:hover { background: #333; color: #fff; }
           </style>
         </head>
         <body>
-          <h1>🛡️ ZeroAd Control Center</h1>
+          <h1>
+            <span>🛡️ ZeroAd Dashboard</span>
+            <a href="/settings" class="settings-link">⚙️ Settings</a>
+          </h1>
           
           <div class="card">
             <div class="stat"><span class="label">Work Status:</span> <span class="status-value">${status}</span></div>
+            <div class="stat"><span class="label">Automation:</span> <span class="value">${schedules.length > 0 ? `ACTIVE (${schedules.join(", ")})` : "DISABLED"}</span></div>
             <div class="stat"><span class="label">Last Sync:</span> <span class="value">${lastRunDate}</span></div>
-            <div class="stat"><span class="label">Active Lists:</span> <span class="value">${lists.length} registered</span></div>
-            ${meta ? `<div class="stat"><span class="label">Sync Progress:</span> <span class="value">${meta.current} / ${meta.total} chunks</span></div>` : ""}
+            <div class="stat"><span class="label">Active Lists:</span> <span class="value">${lists.length} chunks registered</span></div>
+            ${meta ? `<div class="stat"><span class="label">Progress:</span> <span class="value">${meta.current} / ${meta.total} chunks</span></div>` : ""}
           </div>
 
           <div class="card">
@@ -398,7 +421,7 @@ export default {
                         : s.hasUpdate
                           ? '<span class="badge badge-update">UPDATE AVAILABLE</span>'
                           : '<span class="badge badge-ok">CURRENT</span>';
-                    const headerStyle = s.hasUpdate ? 'color: #ef5350; font-weight: bold; opacity: 1;' : '';
+                    const headerStyle = s.hasUpdate ? 'color: #ef5350; font-weight: bold;' : '';
                     return `<tr>
                       <td><div style="font-weight: bold; color: #64b5f6;">${s.name}</div></td>
                       <td>${badge}</td>
@@ -442,6 +465,75 @@ export default {
         </html>
       `;
       return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+
+    // --- Settings Page ---
+    if (request.method === "GET" && path === "/settings") {
+      const customUrls = await env.ADBLOCK_KV.get(KV_KEY_CUSTOM_URLS);
+      const schedules = await getSchedules(env.CLOUDFLARE_ACCOUNT_ID, env.SCRIPT_NAME, env.CLOUDFLARE_API_TOKEN);
+      const currentCron = schedules[0] || "";
+
+      const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <title>ZeroAd Settings</title>
+          <style>
+            body { background: #121212; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 40px; line-height: 1.6; max-width: 800px; margin: 0 auto; }
+            h1 { color: #64b5f6; border-bottom: 1px solid #333; padding-bottom: 10px; }
+            .card { background: #1e1e1e; border: 1px solid #333; padding: 25px; border-radius: 12px; margin-bottom: 30px; }
+            .form-group { margin-bottom: 20px; }
+            label { display: block; color: #9e9e9e; margin-bottom: 8px; font-weight: bold; }
+            textarea, input[type="text"] { width: 100%; background: #121212; border: 1px solid #333; color: #fff; padding: 12px; border-radius: 6px; font-family: inherit; box-sizing: border-box; }
+            .btn { display: inline-block; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; cursor: pointer; border: none; font-size: 14px; }
+            .btn-primary { background: #64b5f6; color: #121212; }
+            .back-link { color: #9e9e9e; text-decoration: none; margin-bottom: 20px; display: inline-block; }
+            .hint { font-size: 12px; color: #666; margin-top: 5px; }
+          </style>
+        </head>
+        <body>
+          <a href="/" class="back-link">← Back to Dashboard</a>
+          <h1>⚙️ ZeroAd Settings</h1>
+          
+          <form method="POST" action="/settings">
+            <div class="card">
+              <div class="form-group">
+                <label>Source List URLs (Comma-separated)</label>
+                <textarea name="urls" rows="5" placeholder="https://example.com/list.txt">${customUrls || env.ADBLOCK_LIST_URLS}</textarea>
+                <div class="hint">Leave empty to use the defaults from wrangler.toml</div>
+              </div>
+
+              <div class="form-group">
+                <label>Cron Schedule</label>
+                <input type="text" name="cron" value="${currentCron}" placeholder="*/5 * * * *">
+                <div class="hint">Standard cron expression (e.g., "0 0 * * *" for daily). Leave empty to disable automation.</div>
+              </div>
+
+              <button type="submit" class="btn btn-primary">💾 Save Configuration</button>
+            </div>
+          </form>
+        </body>
+        </html>
+      `;
+      return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+
+    if (request.method === "POST" && path === "/settings") {
+      const formData = await request.formData();
+      const urls = formData.get("urls")?.toString().trim();
+      const cron = formData.get("cron")?.toString().trim();
+
+      if (urls) {
+        await env.ADBLOCK_KV.put(KV_KEY_CUSTOM_URLS, urls);
+      } else {
+        await env.ADBLOCK_KV.delete(KV_KEY_CUSTOM_URLS);
+      }
+
+      const crons = cron ? [cron] : [];
+      await updateSchedules(env.CLOUDFLARE_ACCOUNT_ID, env.SCRIPT_NAME, env.CLOUDFLARE_API_TOKEN, crons);
+
+      return Response.redirect(url.origin + "/", 302);
     }
 
     // --- JSON Status ---
@@ -512,7 +604,7 @@ export default {
             </head>
             <body>
             <div id="progress-container">
-              <a href="/" class="back-link">← Back to Control Center</a>
+              <a href="/" class="back-link">← Back to Dashboard</a>
               <div id="progress-text" style="margin-bottom: 5px; font-size: 12px; color: #9e9e9e;">Initializing...</div>
               <progress id="sync-progress" value="0" max="100"></progress>
             </div>
@@ -557,6 +649,7 @@ export default {
               const metaStr = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
               if (metaStr) {
                 const m = JSON.parse(metaStr);
+                await write(`📊 Progress: <b>${m.current}/${m.total}</b> updated.`, "meta");
                 await writer.write(encoder.encode(`<script>updateProgress(${m.current}, ${m.total})</script>`));
               }
               subrequestCount += 8;
