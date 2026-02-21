@@ -599,7 +599,7 @@ export default {
               <meta charset="utf-8">
               <title>ZeroAd Sync Stream</title>
               <style>
-                body { background: #121212; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 48px 16px 16px 16px; line-height: 1.3; font-size: 13px; }
+                body { background: #121212; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 80px 16px 16px 16px; line-height: 1.3; font-size: 13px; }
                 #progress-container { position: fixed; top: 0; left: 0; width: 100%; background: #1e1e1e; padding: 12px 16px; border-bottom: 1px solid #333; z-index: 1000; box-sizing: border-box; }
                 progress { width: 100%; height: 10px; appearance: none; border: none; }
                 progress::-webkit-progress-bar { background-color: #333; border-radius: 5px; }
