@@ -348,21 +348,49 @@ export default {
             <div class="stat"><span class="label">Gateway Lists:</span> <span class="value">${lists.length} registered</span></div>
             ${meta ? `<div class="stat"><span class="label">Sync Progress:</span> <span class="value">${meta.current} / ${meta.total} chunks</span></div>` : ""}
           </div>
-          <div class="actions">
-            <a href="/stream" class="btn btn-primary">🚀 Run Full Sync Dashboard</a>
-            <a href="/run" class="btn btn-secondary">⏯️ Run Next Batch</a>
-            <a href="/reset" class="btn btn-danger" onclick="return confirm('Are you sure you want to reset the state?')">⚠️ Reset State</a>
-          </div>
-          <div class="meta-section">
-            <div class="label">Source Metadata:</div>
-            <pre>${JSON.stringify(metadata, null, 2)}</pre>
-          </div>
-          <div style="margin-top: 40px; text-align: right;">
-            <a href="/status.json" class="json-link">View Raw JSON Status</a>
-          </div>
-        </body>
-        </html>
-      `;
+                    <div class="actions">
+                      <div style="margin-bottom: 20px; font-size: 14px; user-select: none;">
+                        <label style="cursor: pointer; color: #ffb74d;">
+                          <input type="checkbox" id="force-toggle" style="vertical-align: middle;"> 
+                          Force Refresh Source Lists (Ignore ETags)
+                        </label>
+                      </div>
+                      <a href="/stream" id="btn-stream" class="btn btn-primary">🚀 Run Full Sync Dashboard</a>
+                      <a href="/run" id="btn-run" class="btn btn-secondary">⏯️ Run Next Batch</a>
+                      <a href="/reset" class="btn btn-danger" onclick="return confirm('Are you sure you want to reset the state?')">⚠️ Reset State</a>
+                    </div>
+          
+                    <div class="meta-section">
+                      <div class="label">Source Metadata:</div>
+                      <pre>${JSON.stringify(metadata, null, 2)}</pre>
+                    </div>
+          
+                    <div style="margin-top: 40px; text-align: right;">
+                      <a href="/status.json" class="json-link">View Raw JSON Status</a>
+                    </div>
+          
+                    <script>
+                      const toggle = document.getElementById('force-toggle');
+                      const streamBtn = document.getElementById('btn-stream');
+                      const runBtn = document.getElementById('btn-run');
+          
+                      toggle.addEventListener('change', () => {
+                        const isForce = toggle.checked;
+                        streamBtn.href = isForce ? '/stream?force=true' : '/stream';
+                        runBtn.href = isForce ? '/run?force=true' : '/run';
+                        
+                        if (isForce) {
+                          streamBtn.innerHTML = '🔥 Run Full Sync (Forced)';
+                          streamBtn.style.background = '#ffb74d';
+                        } else {
+                          streamBtn.innerHTML = '🚀 Run Full Sync Dashboard';
+                          streamBtn.style.background = '#64b5f6';
+                        }
+                      });
+                    </script>
+                  </body>
+                  </html>
+                `;
       return new Response(html, {
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
