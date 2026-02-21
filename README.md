@@ -51,6 +51,14 @@ ZeroAd breaks the synchronization process into four distinct phases across multi
 - **Force Update**: Add `?force=true` to any request to bypass the Smart Skip header checks.
 - **Reset**: Visit `/reset` to return the worker to its initial `IDLE` state.
 
+## Potential Next Steps
+
+- **HTTPS/Path-based Blocking**: Leverage Cloudflare Gateway's **TLS Inspection** to block ads by specific URL paths (e.g., `/js/ads.js`) rather than just whole domains.
+    - *Requirements*: Installation of the Cloudflare Root Certificate on client devices and enabling TLS decryption in the dashboard.
+    - *Implementation*: Extend the parser to extract path-based rules and sync them to `URL` type Gateway lists.
+- **Advanced uBlock Origin Syntax**: Support more complex filters like regex-based blocking (where supported by Cloudflare) and more granular rule types.
+- **Custom Allowlist Management**: Create a dedicated KV-backed interface or dashboard for managing personal whitelists without editing the source code.
+
 ## License
 
 MIT
