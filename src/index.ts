@@ -387,7 +387,7 @@ export default {
           <div class="card">
             <div class="label" style="margin-bottom: 15px; display: block; font-size: 18px; color: #e0e0e0;">Source Blocklists</div>
             <table class="source-table">
-              <thead><tr><th>List Name</th><th>Status</th><th>Stored</th><th>Current</th></tr></thead>
+              <thead><tr><th>List Name</th><th>Status</th><th>Current Header</th></tr></thead>
               <tbody>
                 ${sourceStatuses
                   .map((s) => {
@@ -398,11 +398,11 @@ export default {
                         : s.hasUpdate
                           ? '<span class="badge badge-update">UPDATE AVAILABLE</span>'
                           : '<span class="badge badge-ok">CURRENT</span>';
+                    const headerStyle = s.hasUpdate ? 'color: #ef5350; font-weight: bold; opacity: 1;' : '';
                     return `<tr>
                       <td><div style="font-weight: bold; color: #64b5f6;">${s.name}</div></td>
                       <td>${badge}</td>
-                      <td><span class="etag">${s.storedEtag || "None"}</span></td>
-                      <td><span class="etag">${s.currentEtag}</span></td>
+                      <td><span class="etag" style="${headerStyle}">${s.currentEtag}</span></td>
                     </tr>`;
                   })
                   .join("")}
