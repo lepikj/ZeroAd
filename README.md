@@ -58,22 +58,45 @@ Since the Cloudflare Workers Free Plan has a **10ms CPU limit** and a **50-subre
 -   **Concurrency Protection (Heartbeat)**: To prevent the Cron trigger and a manual Dashboard sync from interfering with each other, the worker maintains a `last_heartbeat` in KV. If an active sync is detected within the last 2 minutes, the cron run is skipped.
 -   **Auto-Resumption**: If a worker execution is terminated by the platform, the state remains in KV. The next cron or dashboard load will automatically pick up from the last successful chunk.
 
-## Setup
+## Detailed Setup Guide
 
-1.  **Configure `wrangler.toml`**: Add your `account_id` and `ADBLOCK_KV` namespace ID.
-2.  **API Token**: Create a Cloudflare API Token with the following permissions:
-    - **Account** > **Zero Trust** > **Edit**
-    - **Account** > **Account Settings** > **Read**
-    - **Account** > **Workers Scripts** > **Edit** (Required for dynamic Cron management)
-3.  **Secrets**:
-    ```bash
-    npx wrangler secret put CLOUDFLARE_API_TOKEN
-    ```
-4.  **Deploy**:
-    ```bash
-    npm install
-    npx wrangler deploy
-    ```
+To protect your privacy, `wrangler.toml` is excluded from Git. Follow these steps to initialize your local environment:
+
+### 1. Initialize Configuration
+Copy the template configuration file:
+```bash
+cp wrangler.toml.example wrangler.toml
+```
+
+### 2. Get your Cloudflare Account ID
+Find your Account ID by running:
+```bash
+npx wrangler whoami
+```
+Copy the ID from the output and paste it into `wrangler.toml` for both the top-level `account_id` and the `CLOUDFLARE_ACCOUNT_ID` variable.
+
+### 3. Create the KV Namespace
+Create the persistent storage for the worker:
+```bash
+npx wrangler kv:namespace create ADBLOCK_KV
+```
+Copy the `id` from the output (e.g., `f8b49529...`) and paste it into the `[[kv_namespaces]]` section of your `wrangler.toml`.
+
+### 4. Create an API Token
+Go to [My Profile > API Tokens](https://dash.cloudflare.com/profile/api-tokens) and create a **Custom Token** with these permissions:
+- **Account** > **Zero Trust** > **Edit**
+- **Account** > **Account Settings** > **Read**
+- **Account** > **Workers Scripts** > **Edit** (For dynamic Cron management)
+
+### 5. Set Secrets & Deploy
+Add your token to the worker's secure storage and deploy:
+```bash
+npx wrangler secret put CLOUDFLARE_API_TOKEN
+# Paste your token when prompted
+
+npm install
+npx wrangler deploy
+```
 
 ## Usage
 

@@ -4,12 +4,12 @@ compatibility_date = "2024-02-21"
 compatibility_flags = ["nodejs_compat"]
 
 # Replace with your Cloudflare Account ID
-account_id = "fe408e9ce02645d28107a1d33b3f38a2"
+account_id = "YOUR_KV_NAMESPACE_ID"
 
 # KV Namespace Binding
 [[kv_namespaces]]
 binding = "ADBLOCK_KV"
-id = "f8b49529055b49ac9900e85c1f27c974"
+id = "YOUR_KV_NAMESPACE_ID"
 
 [vars]
 # Internal name for API calls
@@ -22,7 +22,7 @@ MAX_ITEMS_PER_LIST = 1000
 LIST_PREFIX = "AdBlock_Worker_"
 # Maximum number of lists to manage (Free limit is ~100 lists total)
 MAX_LISTS = 90
-CLOUDFLARE_ACCOUNT_ID = "fe408e9ce02645d28107a1d33b3f38a2"
+CLOUDFLARE_ACCOUNT_ID = "YOUR_ACCOUNT_ID"
 
 [observability]
 enabled = true
