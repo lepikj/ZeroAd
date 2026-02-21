@@ -1,45 +1,60 @@
 /**
  * ZeroAd: Native Cloudflare Worker AdBlocker
- * 
+ *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- * 
+ *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Affero General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-import { Bindings, fetchAdBlockList, getGatewayLists, createOrUpdateGatewayList, updateGatewayPolicy } from './api';
-const KV_KEY_STATUS = 'status';
-const KV_KEY_CHUNKS_META = 'chunks_meta';
-const KV_KEY_LIST_IDS = 'list_ids';
-const KV_KEY_LAST_RUN = 'last_run';
-const CHUNK_PREFIX = 'chunk_';
+import {
+  Bindings,
+  fetchAdBlockList,
+  getGatewayLists,
+  createOrUpdateGatewayList,
+  updateGatewayPolicy,
+} from "./api";
+const KV_KEY_STATUS = "status";
+const KV_KEY_CHUNKS_META = "chunks_meta";
+const KV_KEY_LIST_IDS = "list_ids";
+const KV_KEY_LAST_RUN = "last_run";
+const CHUNK_PREFIX = "chunk_";
 const BATCH_SIZE = 5; // Process 5 lists per cron execution to be safe
-const KV_KEY_METADATA = 'source_metadata';
+const KV_KEY_METADATA = "source_metadata";
 async function handleDownloading(env: Bindings, forceUpdate: boolean = false) {
   // Update heartbeat
   await env.ADBLOCK_KV.put(KV_KEY_HEARTBEAT, Date.now().toString());
-  console.log('Checking for source list changes...');
+  console.log("Checking for source list changes...");
   try {
     const metadataStr = await env.ADBLOCK_KV.get(KV_KEY_METADATA);
     const currentMetadata = metadataStr ? JSON.parse(metadataStr) : {};
-    const urls = env.ADBLOCK_LIST_URLS.split(',').map(u => u.trim()).filter(u => u);
+    const urls = env.ADBLOCK_LIST_URLS.split(",")
+      .map((u) => u.trim())
+      .filter((u) => u);
     // Pass metadata to skip if headers match, unless forced
-    const result = await fetchAdBlockList(urls, forceUpdate ? {} : currentMetadata);
+    const result = await fetchAdBlockList(
+      urls,
+      forceUpdate ? {} : currentMetadata,
+    );
     if (!result.updated) {
-      console.log('No changes detected in source lists. Skipping update cycle.');
-      await env.ADBLOCK_KV.put(KV_KEY_STATUS, 'IDLE');
+      console.log(
+        "No changes detected in source lists. Skipping update cycle.",
+      );
+      await env.ADBLOCK_KV.put(KV_KEY_STATUS, "IDLE");
       await env.ADBLOCK_KV.put(KV_KEY_LAST_RUN, Date.now().toString());
       return;
     }
     const { blocked, allowed, metadata } = result;
-    console.log(`Changes detected. Processing ${blocked!.size} blocked domains and ${allowed!.size} allowed domains.`);
+    console.log(
+      `Changes detected. Processing ${blocked!.size} blocked domains and ${allowed!.size} allowed domains.`,
+    );
     // Apply whitelisting: remove allowed domains from blocked set
     for (const domain of allowed!) {
       blocked!.delete(domain);
@@ -48,28 +63,37 @@ async function handleDownloading(env: Bindings, forceUpdate: boolean = false) {
     console.log(`Final list size after whitelisting: ${finalDomains.length}`);
     const maxItems = parseInt(env.MAX_ITEMS_PER_LIST) || 1000;
     const totalChunks = Math.ceil(finalDomains.length / maxItems);
-    const fullListStr = finalDomains.join('\n');
-    await env.ADBLOCK_KV.put('FULL_LIST', fullListStr);
+    const fullListStr = finalDomains.join("\n");
+    await env.ADBLOCK_KV.put("FULL_LIST", fullListStr);
     await env.ADBLOCK_KV.put(KV_KEY_METADATA, JSON.stringify(metadata));
-    await env.ADBLOCK_KV.put(KV_KEY_CHUNKS_META, JSON.stringify({
-      total: totalChunks,
-      current: 0
-    }));
+    await env.ADBLOCK_KV.put(
+      KV_KEY_CHUNKS_META,
+      JSON.stringify({
+        total: totalChunks,
+        current: 0,
+      }),
+    );
     await env.ADBLOCK_KV.put(KV_KEY_LIST_IDS, JSON.stringify([])); // Reset list IDs
-    await env.ADBLOCK_KV.put(KV_KEY_STATUS, 'UPDATING_LISTS');
-    console.log('Download complete. Saved FULL_LIST. Moving to UPDATING_LISTS.');
+    await env.ADBLOCK_KV.put(KV_KEY_STATUS, "UPDATING_LISTS");
+    console.log(
+      "Download complete. Saved FULL_LIST. Moving to UPDATING_LISTS.",
+    );
   } catch (e: any) {
     console.error(`Download failed: ${e.message}`);
     // Retry next time
   }
 }
-const KV_KEY_HEARTBEAT = 'last_heartbeat';
-async function handleUpdatingLists(env: Bindings, cachedDomains?: string[], existingListsMap?: Record<string, string>) {
+const KV_KEY_HEARTBEAT = "last_heartbeat";
+async function handleUpdatingLists(
+  env: Bindings,
+  cachedDomains?: string[],
+  existingListsMap?: Record<string, string>,
+) {
   // Update heartbeat to signal we are active
   await env.ADBLOCK_KV.put(KV_KEY_HEARTBEAT, Date.now().toString());
   const metaStr = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
   if (!metaStr) {
-    await env.ADBLOCK_KV.put(KV_KEY_STATUS, 'IDLE');
+    await env.ADBLOCK_KV.put(KV_KEY_STATUS, "IDLE");
     return;
   }
   let meta = JSON.parse(metaStr);
@@ -77,15 +101,15 @@ async function handleUpdatingLists(env: Bindings, cachedDomains?: string[], exis
   let listIds: string[] = listIdsStr ? JSON.parse(listIdsStr) : [];
   let allDomains: string[] = [];
   if (cachedDomains) {
-      allDomains = cachedDomains;
+    allDomains = cachedDomains;
   } else {
-      const fullListStr = await env.ADBLOCK_KV.get('FULL_LIST');
-      if (!fullListStr) {
-          console.error("FULL_LIST missing");
-          await env.ADBLOCK_KV.put(KV_KEY_STATUS, 'DOWNLOADING'); 
-          return;
-      }
-      allDomains = fullListStr.split('\n');
+    const fullListStr = await env.ADBLOCK_KV.get("FULL_LIST");
+    if (!fullListStr) {
+      console.error("FULL_LIST missing");
+      await env.ADBLOCK_KV.put(KV_KEY_STATUS, "DOWNLOADING");
+      return;
+    }
+    allDomains = fullListStr.split("\n");
   }
   const maxItems = parseInt(env.MAX_ITEMS_PER_LIST) || 1000;
   const maxLists = parseInt(env.MAX_LISTS) || 90;
@@ -94,7 +118,7 @@ async function handleUpdatingLists(env: Bindings, cachedDomains?: string[], exis
   while (processedCount < BATCH_SIZE && meta.current < meta.total) {
     if (meta.current >= maxLists) {
       console.warn(`Reached max lists limit (${maxLists}).`);
-      break; 
+      break;
     }
     const chunkIndex = meta.current;
     const start = chunkIndex * maxItems;
@@ -103,16 +127,18 @@ async function handleUpdatingLists(env: Bindings, cachedDomains?: string[], exis
     const listName = `${env.LIST_PREFIX}${chunkIndex + 1}`;
     console.log(`Updating list ${listName} (${chunkItems.length} items)...`);
     try {
-      const existingId = existingListsMap ? existingListsMap[listName] : undefined;
+      const existingId = existingListsMap
+        ? existingListsMap[listName]
+        : undefined;
       const id = await createOrUpdateGatewayList(
         env.CLOUDFLARE_ACCOUNT_ID,
         env.CLOUDFLARE_API_TOKEN,
         listName,
         chunkItems,
-        existingId
+        existingId,
       );
       if (id && !listIds.includes(id)) {
-          listIds.push(id);
+        listIds.push(id);
       }
     } catch (e: any) {
       console.error(`Failed to update list ${listName}: ${e.message}`);
@@ -124,8 +150,8 @@ async function handleUpdatingLists(env: Bindings, cachedDomains?: string[], exis
   await env.ADBLOCK_KV.put(KV_KEY_CHUNKS_META, JSON.stringify(meta));
   await env.ADBLOCK_KV.put(KV_KEY_LIST_IDS, JSON.stringify(listIds));
   if (meta.current >= meta.total || meta.current >= maxLists) {
-    console.log('All lists updated. Moving to UPDATING_POLICY.');
-    await env.ADBLOCK_KV.put(KV_KEY_STATUS, 'UPDATING_POLICY');
+    console.log("All lists updated. Moving to UPDATING_POLICY.");
+    await env.ADBLOCK_KV.put(KV_KEY_STATUS, "UPDATING_POLICY");
   } else {
     console.log(`Batch complete. Progress: ${meta.current}/${meta.total}`);
   }
@@ -133,106 +159,129 @@ async function handleUpdatingLists(env: Bindings, cachedDomains?: string[], exis
 async function handleUpdatingPolicy(env: Bindings) {
   // Update heartbeat
   await env.ADBLOCK_KV.put(KV_KEY_HEARTBEAT, Date.now().toString());
-  console.log('Updating Gateway Policy...');
+  console.log("Updating Gateway Policy...");
   const listIdsStr = await env.ADBLOCK_KV.get(KV_KEY_LIST_IDS);
   const listIds: string[] = listIdsStr ? JSON.parse(listIdsStr) : [];
   if (listIds.length === 0) {
-    console.error('No lists created. Skipping policy update.');
-    await env.ADBLOCK_KV.put(KV_KEY_STATUS, 'IDLE');
+    console.error("No lists created. Skipping policy update.");
+    await env.ADBLOCK_KV.put(KV_KEY_STATUS, "IDLE");
     return;
   }
   try {
     await updateGatewayPolicy(
       env.CLOUDFLARE_ACCOUNT_ID,
       env.CLOUDFLARE_API_TOKEN,
-      'Block Ads (Worker)',
-      listIds
+      "Block Ads (Worker)",
+      listIds,
     );
-    console.log('Policy updated successfully.');
+    console.log("Policy updated successfully.");
   } catch (e: any) {
     console.error(`Policy update failed: ${e.message}`);
   }
   // Move to Cleanup instead of IDLE
-  await env.ADBLOCK_KV.put(KV_KEY_STATUS, 'CLEANING_UP');
-  console.log('Moving to CLEANING_UP phase.');
+  await env.ADBLOCK_KV.put(KV_KEY_STATUS, "CLEANING_UP");
+  console.log("Moving to CLEANING_UP phase.");
 }
 async function handleCleanup(env: Bindings) {
   // Update heartbeat
   await env.ADBLOCK_KV.put(KV_KEY_HEARTBEAT, Date.now().toString());
-  console.log('Cleaning up old lists...');
+  console.log("Cleaning up old lists...");
   const metaStr = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
   if (!metaStr) {
-    await env.ADBLOCK_KV.put(KV_KEY_STATUS, 'IDLE');
+    await env.ADBLOCK_KV.put(KV_KEY_STATUS, "IDLE");
     return;
   }
   const meta = JSON.parse(metaStr);
   const maxUsedIndex = meta.total;
-  const allLists = await getGatewayLists(env.CLOUDFLARE_ACCOUNT_ID, env.CLOUDFLARE_API_TOKEN);
-  const toDelete = allLists.filter(l => {
+  const allLists = await getGatewayLists(
+    env.CLOUDFLARE_ACCOUNT_ID,
+    env.CLOUDFLARE_API_TOKEN,
+  );
+  const toDelete = allLists.filter((l) => {
     if (!l.name.startsWith(env.LIST_PREFIX)) return false;
     const indexPart = l.name.substring(env.LIST_PREFIX.length);
     const index = parseInt(indexPart);
     return !isNaN(index) && index > maxUsedIndex;
   });
   console.log(`Found ${toDelete.length} old lists to delete.`);
-  const { deleteGatewayList } = await import('./api');
+  const { deleteGatewayList } = await import("./api");
   for (const list of toDelete) {
     console.log(`Deleting list: ${list.name} (${list.id})`);
-    await deleteGatewayList(env.CLOUDFLARE_ACCOUNT_ID, env.CLOUDFLARE_API_TOKEN, list.id);
+    await deleteGatewayList(
+      env.CLOUDFLARE_ACCOUNT_ID,
+      env.CLOUDFLARE_API_TOKEN,
+      list.id,
+    );
   }
   // Cleanup and Finish
-  await env.ADBLOCK_KV.put(KV_KEY_STATUS, 'IDLE');
+  await env.ADBLOCK_KV.put(KV_KEY_STATUS, "IDLE");
   await env.ADBLOCK_KV.put(KV_KEY_LAST_RUN, Date.now().toString());
-  await env.ADBLOCK_KV.delete(KV_KEY_HEARTBEAT); 
-  console.log('Cleanup complete. Cycle finished.');
+  await env.ADBLOCK_KV.delete(KV_KEY_HEARTBEAT);
+  console.log("Cleanup complete. Cycle finished.");
 }
 export default {
-  async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext): Promise<void> {
+  async scheduled(
+    event: ScheduledEvent,
+    env: Bindings,
+    ctx: ExecutionContext,
+  ): Promise<void> {
     // Concurrency Check: If heartbeat is fresh, another worker (like a stream) is active.
     const lastHeartbeat = await env.ADBLOCK_KV.get(KV_KEY_HEARTBEAT);
-    if (lastHeartbeat && (Date.now() - parseInt(lastHeartbeat)) < 120000) { // 2 minutes
-        console.log('Another worker is currently active (heartbeat detected). Skipping cron run.');
-        return;
+    if (lastHeartbeat && Date.now() - parseInt(lastHeartbeat) < 120000) {
+      // 2 minutes
+      console.log(
+        "Another worker is currently active (heartbeat detected). Skipping cron run.",
+      );
+      return;
     }
-    const status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || 'IDLE';
+    const status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
     console.log(`Current Status: ${status}`);
-    if (status === 'IDLE') {
+    if (status === "IDLE") {
       const lastRun = await env.ADBLOCK_KV.get(KV_KEY_LAST_RUN);
       const now = Date.now();
-      if (!lastRun || (now - parseInt(lastRun)) > 24 * 60 * 60 * 1000) {
-        console.log('Starting new update cycle...');
-        await env.ADBLOCK_KV.put(KV_KEY_STATUS, 'DOWNLOADING');
+      if (!lastRun || now - parseInt(lastRun) > 24 * 60 * 60 * 1000) {
+        console.log("Starting new update cycle...");
+        await env.ADBLOCK_KV.put(KV_KEY_STATUS, "DOWNLOADING");
         return handleDownloading(env);
       } else {
-        console.log('Update not needed yet.');
+        console.log("Update not needed yet.");
       }
-    } else if (status === 'DOWNLOADING') {
+    } else if (status === "DOWNLOADING") {
       await handleDownloading(env);
-    } else if (status === 'UPDATING_LISTS') {
-      const lists = await getGatewayLists(env.CLOUDFLARE_ACCOUNT_ID, env.CLOUDFLARE_API_TOKEN);
+    } else if (status === "UPDATING_LISTS") {
+      const lists = await getGatewayLists(
+        env.CLOUDFLARE_ACCOUNT_ID,
+        env.CLOUDFLARE_API_TOKEN,
+      );
       const existingMap: Record<string, string> = {};
-      lists.forEach((l: any) => existingMap[l.name] = l.id);
+      lists.forEach((l: any) => (existingMap[l.name] = l.id));
       await handleUpdatingLists(env, undefined, existingMap);
-    } else if (status === 'UPDATING_POLICY') {
+    } else if (status === "UPDATING_POLICY") {
       await handleUpdatingPolicy(env);
-    } else if (status === 'CLEANING_UP') {
+    } else if (status === "CLEANING_UP") {
       await handleCleanup(env);
     }
   },
-    async fetch(request: Request, env: Bindings, ctx: ExecutionContext): Promise<Response> {
-      const url = new URL(request.url);
-      const path = url.pathname;
-      if (request.method === 'GET' && path === '/') {
-        const status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || 'IDLE';
-        const metaStr = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
-        const meta = metaStr ? JSON.parse(metaStr) : null;
-        const listsStr = await env.ADBLOCK_KV.get(KV_KEY_LIST_IDS);
-        const lists = listsStr ? JSON.parse(listsStr) : [];
-        const metadataStr = await env.ADBLOCK_KV.get(KV_KEY_METADATA);
-        const metadata = metadataStr ? JSON.parse(metadataStr) : {};
-        const lastRun = await env.ADBLOCK_KV.get(KV_KEY_LAST_RUN);
-        const lastRunDate = lastRun ? new Date(parseInt(lastRun)).toLocaleString() : 'Never';
-        const html = `
+  async fetch(
+    request: Request,
+    env: Bindings,
+    ctx: ExecutionContext,
+  ): Promise<Response> {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    if (request.method === "GET" && path === "/") {
+      const status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
+      const metaStr = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
+      const meta = metaStr ? JSON.parse(metaStr) : null;
+      const listsStr = await env.ADBLOCK_KV.get(KV_KEY_LIST_IDS);
+      const lists = listsStr ? JSON.parse(listsStr) : [];
+      const metadataStr = await env.ADBLOCK_KV.get(KV_KEY_METADATA);
+      const metadata = metadataStr ? JSON.parse(metadataStr) : {};
+      const lastRun = await env.ADBLOCK_KV.get(KV_KEY_LAST_RUN);
+      const lastRunDate = lastRun
+        ? new Date(parseInt(lastRun)).toLocaleString()
+        : "Never";
+      const html = `
           <!DOCTYPE html>
           <html>
           <head>
@@ -262,7 +311,7 @@ export default {
               <div class="stat"><span class="label">Current Status:</span> <span class="status-value">${status}</span></div>
               <div class="stat"><span class="label">Last Sync:</span> <span class="value">${lastRunDate}</span></div>
               <div class="stat"><span class="label">Gateway Lists:</span> <span class="value">${lists.length} registered</span></div>
-              ${meta ? `<div class="stat"><span class="label">Sync Progress:</span> <span class="value">${meta.current} / ${meta.total} chunks</span></div>` : ''}
+              ${meta ? `<div class="stat"><span class="label">Sync Progress:</span> <span class="value">${meta.current} / ${meta.total} chunks</span></div>` : ""}
             </div>
             <div class="actions">
               <a href="/stream" class="btn btn-primary">🚀 Run Full Sync Dashboard</a>
@@ -279,39 +328,50 @@ export default {
           </body>
           </html>
         `;
-        return new Response(html, {
-          headers: { 'Content-Type': 'text/html; charset=utf-8' }
-        });
-      }
-      if (request.method === 'GET' && path === '/status.json') {
-        const status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || 'IDLE';
-        const meta = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
-        const lists = await env.ADBLOCK_KV.get(KV_KEY_LIST_IDS);
-        const metadata = await env.ADBLOCK_KV.get(KV_KEY_METADATA);
-        const lastRun = await env.ADBLOCK_KV.get(KV_KEY_LAST_RUN);
-        return new Response(JSON.stringify({
-          status,
-          meta: meta ? JSON.parse(meta) : null,
-          lists_count: lists ? JSON.parse(lists).length : 0,
-          last_run: lastRun,
-          sources: metadata ? JSON.parse(metadata) : {}
-        }, null, 2), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-        if (request.method === 'GET' && path === '/stream') {
-          const { readable, writable } = new TransformStream();
-          const writer = writable.getWriter();
-          const encoder = new TextEncoder();
-          const force = url.searchParams.get('force') === 'true';
-          const write = async (msg: string, className: string = '') => {
-            const div = className ? `<div class="${className}">${msg}</div>` : `<div>${msg}</div>`;
-            await writer.write(encoder.encode(div + '\n'));
-          };
-          ctx.waitUntil((async () => {
-            try {
-              // Send HTML Header
-              await writer.write(encoder.encode(`
+      return new Response(html, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+    if (request.method === "GET" && path === "/status.json") {
+      const status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
+      const meta = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
+      const lists = await env.ADBLOCK_KV.get(KV_KEY_LIST_IDS);
+      const metadata = await env.ADBLOCK_KV.get(KV_KEY_METADATA);
+      const lastRun = await env.ADBLOCK_KV.get(KV_KEY_LAST_RUN);
+      return new Response(
+        JSON.stringify(
+          {
+            status,
+            meta: meta ? JSON.parse(meta) : null,
+            lists_count: lists ? JSON.parse(lists).length : 0,
+            last_run: lastRun,
+            sources: metadata ? JSON.parse(metadata) : {},
+          },
+          null,
+          2,
+        ),
+        {
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+    if (request.method === "GET" && path === "/stream") {
+      const { readable, writable } = new TransformStream();
+      const writer = writable.getWriter();
+      const encoder = new TextEncoder();
+      const force = url.searchParams.get("force") === "true";
+      const write = async (msg: string, className: string = "") => {
+        const div = className
+          ? `<div class="${className}">${msg}</div>`
+          : `<div>${msg}</div>`;
+        await writer.write(encoder.encode(div + "\n"));
+      };
+      ctx.waitUntil(
+        (async () => {
+          try {
+            // Send HTML Header
+            await writer.write(
+              encoder.encode(`
                 <!DOCTYPE html>
                 <html>
                 <head>
@@ -351,140 +411,187 @@ export default {
                                 <div id="progress-text" style="margin-bottom: 5px; font-size: 12px; color: #9e9e9e;">Initializing...</div>
                                 <progress id="sync-progress" value="0" max="100"></progress>
                               </div>
-                              <!-- 1KB Padding to bypass browser buffering: ${' '.repeat(1024)} -->
-                            `));
-                            await write(`🚀 Starting stream processing... (Force: ${force})`, 'info');
-                            let subrequestCount = 0;
-                            const SUBREQUEST_LIMIT = 40; 
-                            await write(`📡 Pre-fetching Gateway lists...`, 'meta');
-                            const lists = await getGatewayLists(env.CLOUDFLARE_ACCOUNT_ID, env.CLOUDFLARE_API_TOKEN);
-                            subrequestCount++;
-                            const existingMap: Record<string, string> = {};
-                            lists.forEach((l: any) => existingMap[l.name] = l.id);
-                            let status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || 'IDLE';
-                            let cachedDomains: string[] | undefined;
-                            // Initial progress if available
-                            const initialMeta = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
-                            if (initialMeta) {
-                              const m = JSON.parse(initialMeta);
-                              await writer.write(encoder.encode(`<script>updateProgress(${m.current}, ${m.total})</script>`));
-                            }
-                            while (subrequestCount < SUBREQUEST_LIMIT) {
-                               status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || 'IDLE';
-                               subrequestCount++; 
-                               await write(`📍 Current Phase: <span class="status">${status}</span> <span class="meta">(Subrequests: ${subrequestCount}/${SUBREQUEST_LIMIT})</span>`);
-                               if (status === 'IDLE') {
-                                   await write(`🆕 IDLE -> Starting new cycle.`, 'info');
-                                   await env.ADBLOCK_KV.put(KV_KEY_STATUS, 'DOWNLOADING');
-                                   subrequestCount++;
-                                   status = 'DOWNLOADING';
-                               }
-                               if (status === 'DOWNLOADING') {
-                                   await write(`📥 Downloading and checking lists...`, 'info');
-                                   await handleDownloading(env, force);
-                                   subrequestCount += 5;
-                                   const newStatus = await env.ADBLOCK_KV.get(KV_KEY_STATUS);
-                                   subrequestCount++;
-                                   if (newStatus === 'IDLE') {
-                                       await write(`✅ No changes detected. Stream ending.`, 'success');
-                                       await writer.write(encoder.encode(`<script>updateProgress(100, 100)</script>`));
-                                       break;
-                                   }
-                                   const fullListStr = await env.ADBLOCK_KV.get('FULL_LIST');
-                                   subrequestCount++;
-                                   if (fullListStr) cachedDomains = fullListStr.split('\n');
-                                   await write(`✔️ Download complete.`, 'info');
-                               } else if (status === 'UPDATING_LISTS') {
-                                   if (!cachedDomains) {
-                                       const fullListStr = await env.ADBLOCK_KV.get('FULL_LIST');
-                                       subrequestCount++;
-                                       if (fullListStr) cachedDomains = fullListStr.split('\n');
-                                   }
-                                   await write(`🔄 Updating lists batch...`, 'info');
-                                   await handleUpdatingLists(env, cachedDomains, existingMap);
-                                   subrequestCount += BATCH_SIZE + 2;
-                                   const metaStr = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
-                                   subrequestCount++;
-                                   if (metaStr) {
-                                       const meta = JSON.parse(metaStr);
-                                       await write(`📊 Progress: <b>${meta.current}/${meta.total}</b> lists updated.`, 'meta');
-                                       await writer.write(encoder.encode(`<script>updateProgress(${meta.current}, ${meta.total})</script>`));
-                                   }
-                               } else if (status === 'UPDATING_POLICY') {
-                                   await writer.write(encoder.encode(`<script>updateProgress(99, 100)</script>`));
-                                   await write(`🛡️ Updating Gateway Policy...`, 'info');
-                                   await handleUpdatingPolicy(env);
-                                   subrequestCount += 3;
-                               } else if (status === 'CLEANING_UP') {
-                                   await writer.write(encoder.encode(`<script>updateProgress(100, 100)</script>`));
-                                   await write(`🧹 Cleaning up old lists...`, 'info');
-                                   await handleCleanup(env);
-                                   subrequestCount += 10;
-                                   await write(`✨ Cycle Complete! All lists synchronized.`, 'success');
-                                   break; 
-                               }
-                               await new Promise(r => setTimeout(r, 100));
-                            }
-              if (subrequestCount >= SUBREQUEST_LIMIT) {
-                  const reloadUrl = new URL(request.url);
-                  reloadUrl.searchParams.delete('force'); // Resume without force
-                  await write(`<hr>`);
-                  await write(`⚠️ Subrequest limit reached (${subrequestCount}/${SUBREQUEST_LIMIT}).`, 'warn');
-                  await write(`🔄 Auto-reloading in 2 seconds to continue...`, 'info');
-                  await write(`🔗 <a href="${reloadUrl.toString()}">Click here if it doesn't reload automatically</a>`, 'meta');
-                  await writer.write(encoder.encode(`
+                              <!-- 1KB Padding to bypass browser buffering: ${" ".repeat(1024)} -->
+                            `),
+            );
+            await write(
+              `🚀 Starting stream processing... (Force: ${force})`,
+              "info",
+            );
+            let subrequestCount = 0;
+            const SUBREQUEST_LIMIT = 40;
+            await write(`📡 Pre-fetching Gateway lists...`, "meta");
+            const lists = await getGatewayLists(
+              env.CLOUDFLARE_ACCOUNT_ID,
+              env.CLOUDFLARE_API_TOKEN,
+            );
+            subrequestCount++;
+            const existingMap: Record<string, string> = {};
+            lists.forEach((l: any) => (existingMap[l.name] = l.id));
+            let status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
+            let cachedDomains: string[] | undefined;
+            // Initial progress if available
+            const initialMeta = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
+            if (initialMeta) {
+              const m = JSON.parse(initialMeta);
+              await writer.write(
+                encoder.encode(
+                  `<script>updateProgress(${m.current}, ${m.total})</script>`,
+                ),
+              );
+            }
+            while (subrequestCount < SUBREQUEST_LIMIT) {
+              status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
+              subrequestCount++;
+              await write(
+                `📍 Current Phase: <span class="status">${status}</span> <span class="meta">(Subrequests: ${subrequestCount}/${SUBREQUEST_LIMIT})</span>`,
+              );
+              if (status === "IDLE") {
+                await write(`🆕 IDLE -> Starting new cycle.`, "info");
+                await env.ADBLOCK_KV.put(KV_KEY_STATUS, "DOWNLOADING");
+                subrequestCount++;
+                status = "DOWNLOADING";
+              }
+              if (status === "DOWNLOADING") {
+                await write(`📥 Downloading and checking lists...`, "info");
+                await handleDownloading(env, force);
+                subrequestCount += 5;
+                const newStatus = await env.ADBLOCK_KV.get(KV_KEY_STATUS);
+                subrequestCount++;
+                if (newStatus === "IDLE") {
+                  await write(
+                    `✅ No changes detected. Stream ending.`,
+                    "success",
+                  );
+                  await writer.write(
+                    encoder.encode(`<script>updateProgress(100, 100)</script>`),
+                  );
+                  break;
+                }
+                const fullListStr = await env.ADBLOCK_KV.get("FULL_LIST");
+                subrequestCount++;
+                if (fullListStr) cachedDomains = fullListStr.split("\n");
+                await write(`✔️ Download complete.`, "info");
+              } else if (status === "UPDATING_LISTS") {
+                if (!cachedDomains) {
+                  const fullListStr = await env.ADBLOCK_KV.get("FULL_LIST");
+                  subrequestCount++;
+                  if (fullListStr) cachedDomains = fullListStr.split("\n");
+                }
+                await write(`🔄 Updating lists batch...`, "info");
+                await handleUpdatingLists(env, cachedDomains, existingMap);
+                subrequestCount += BATCH_SIZE + 2;
+                const metaStr = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
+                subrequestCount++;
+                if (metaStr) {
+                  const meta = JSON.parse(metaStr);
+                  await write(
+                    `📊 Progress: <b>${meta.current}/${meta.total}</b> lists updated.`,
+                    "meta",
+                  );
+                  await writer.write(
+                    encoder.encode(
+                      `<script>updateProgress(${meta.current}, ${meta.total})</script>`,
+                    ),
+                  );
+                }
+              } else if (status === "UPDATING_POLICY") {
+                await writer.write(
+                  encoder.encode(`<script>updateProgress(99, 100)</script>`),
+                );
+                await write(`🛡️ Updating Gateway Policy...`, "info");
+                await handleUpdatingPolicy(env);
+                subrequestCount += 3;
+              } else if (status === "CLEANING_UP") {
+                await writer.write(
+                  encoder.encode(`<script>updateProgress(100, 100)</script>`),
+                );
+                await write(`🧹 Cleaning up old lists...`, "info");
+                await handleCleanup(env);
+                subrequestCount += 10;
+                await write(
+                  `✨ Cycle Complete! All lists synchronized.`,
+                  "success",
+                );
+                break;
+              }
+              await new Promise((r) => setTimeout(r, 100));
+            }
+            if (subrequestCount >= SUBREQUEST_LIMIT) {
+              const reloadUrl = new URL(request.url);
+              reloadUrl.searchParams.delete("force"); // Resume without force
+              await write(`<hr>`);
+              await write(
+                `⚠️ Subrequest limit reached (${subrequestCount}/${SUBREQUEST_LIMIT}).`,
+                "warn",
+              );
+              await write(
+                `🔄 Auto-reloading in 2 seconds to continue...`,
+                "info",
+              );
+              await write(
+                `🔗 <a href="${reloadUrl.toString()}">Click here if it doesn't reload automatically</a>`,
+                "meta",
+              );
+              await writer.write(
+                encoder.encode(`
                     <script>
                       setTimeout(() => {
                         window.location.href = "${reloadUrl.toString()}";
                       }, 2000);
                     </script>
-                  `));
-              }
-              await writer.write(encoder.encode(`</body></html>`));
-            } catch (e: any) {
-              await write(`❌ Error: ${e.message}`, 'error');
-            } finally {
-              await writer.close();
+                  `),
+              );
             }
-          })());
-          return new Response(readable, {
-            headers: { 
-              'Content-Type': 'text/html; charset=utf-8',
-              'X-Content-Type-Options': 'nosniff',
-              'Cache-Control': 'no-cache'
-            }
-          });
-        }
-        if (request.method === 'GET' && path === '/run') {
-          const url = new URL(request.url);
-          const status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || 'IDLE';
-          const force = url.searchParams.get('force') === 'true';
-          if (status === 'IDLE') {
-              await env.ADBLOCK_KV.put(KV_KEY_STATUS, 'DOWNLOADING');
-              ctx.waitUntil(handleDownloading(env, force));
-          } else if (status === 'DOWNLOADING') {
-              ctx.waitUntil(handleDownloading(env, force));
-          } else if (status === 'UPDATING_LISTS') {
-              const lists = await getGatewayLists(env.CLOUDFLARE_ACCOUNT_ID, env.CLOUDFLARE_API_TOKEN);
-              const existingMap: Record<string, string> = {};
-              lists.forEach((l: any) => existingMap[l.name] = l.id);
-              ctx.waitUntil(handleUpdatingLists(env, undefined, existingMap));
-          } else if (status === 'UPDATING_POLICY') {
-              ctx.waitUntil(handleUpdatingPolicy(env));
-          } else if (status === 'CLEANING_UP') {
-              ctx.waitUntil(handleCleanup(env));
+            await writer.write(encoder.encode(`</body></html>`));
+          } catch (e: any) {
+            await write(`❌ Error: ${e.message}`, "error");
+          } finally {
+            await writer.close();
           }
-          return Response.redirect(url.origin + '/', 302);
-        }
-        if (request.method === 'GET' && path === '/reset') {
-          await env.ADBLOCK_KV.put(KV_KEY_STATUS, 'IDLE');
-          await env.ADBLOCK_KV.delete(KV_KEY_CHUNKS_META);
-          await env.ADBLOCK_KV.delete(KV_KEY_LIST_IDS);
-          await env.ADBLOCK_KV.delete(KV_KEY_LAST_RUN);
-          await env.ADBLOCK_KV.delete(KV_KEY_METADATA);
-          await env.ADBLOCK_KV.delete(KV_KEY_HEARTBEAT);
-          return Response.redirect(url.origin + '/', 302);
-        }
+        })(),
+      );
+      return new Response(readable, {
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "X-Content-Type-Options": "nosniff",
+          "Cache-Control": "no-cache",
+        },
+      });
+    }
+    if (request.method === "GET" && path === "/run") {
+      const url = new URL(request.url);
+      const status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
+      const force = url.searchParams.get("force") === "true";
+      if (status === "IDLE") {
+        await env.ADBLOCK_KV.put(KV_KEY_STATUS, "DOWNLOADING");
+        ctx.waitUntil(handleDownloading(env, force));
+      } else if (status === "DOWNLOADING") {
+        ctx.waitUntil(handleDownloading(env, force));
+      } else if (status === "UPDATING_LISTS") {
+        const lists = await getGatewayLists(
+          env.CLOUDFLARE_ACCOUNT_ID,
+          env.CLOUDFLARE_API_TOKEN,
+        );
+        const existingMap: Record<string, string> = {};
+        lists.forEach((l: any) => (existingMap[l.name] = l.id));
+        ctx.waitUntil(handleUpdatingLists(env, undefined, existingMap));
+      } else if (status === "UPDATING_POLICY") {
+        ctx.waitUntil(handleUpdatingPolicy(env));
+      } else if (status === "CLEANING_UP") {
+        ctx.waitUntil(handleCleanup(env));
+      }
+      return Response.redirect(url.origin + "/", 302);
+    }
+    if (request.method === "GET" && path === "/reset") {
+      await env.ADBLOCK_KV.put(KV_KEY_STATUS, "IDLE");
+      await env.ADBLOCK_KV.delete(KV_KEY_CHUNKS_META);
+      await env.ADBLOCK_KV.delete(KV_KEY_LIST_IDS);
+      await env.ADBLOCK_KV.delete(KV_KEY_LAST_RUN);
+      await env.ADBLOCK_KV.delete(KV_KEY_METADATA);
+      await env.ADBLOCK_KV.delete(KV_KEY_HEARTBEAT);
+      return Response.redirect(url.origin + "/", 302);
+    }
     return new Response("Not Found", { status: 404 });
-  }
+  },
 };
