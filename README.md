@@ -5,11 +5,20 @@ ZeroAd is a high-performance, serverless adblocker designed to run natively on *
 ## Features
 
 - **Native Worker Implementation**: No external servers, GitHub Actions, or local scripts required for daily operation.
+- **Dynamic Configuration UI**: Manage source list URLs and Cron schedules directly from the browser (KV & Cloudflare API-backed).
 - **Stateful Processing**: Uses a Cron-driven State Machine (Workers KV) to bypass the 10ms CPU and 50-subrequest limits of the Cloudflare Free Plan.
 - **Smart Updates (ETag/Last-Modified)**: Uses HTTP header checks to detect source list changes, skipping unnecessary processing and saving API/KV units.
 - **Streaming Interface**: Includes a `/stream` endpoint for real-time progress monitoring and manual synchronization.
 - **Multiple List Support**: Supports AdGuard and uBlock Origin syntax (`||domain^`, `@@||domain^`, etc.) with full whitelisting and prioritization.
 - **Large Capacity**: Manages up to 90,000 domains (90 Gateway lists of 1,000 items each).
+
+## Access Control & Security
+
+Since this worker provides a web-based dashboard and settings page that can modify your Cloudflare account configuration, it is **highly recommended** to protect it:
+
+1.  **Cloudflare Access**: Create a **Zero Trust Application** (Self-hosted) for your worker's domain.
+2.  **Restrict Access**: Use an email or identity-based policy to ensure that only you can visit the dashboard, settings, and `/stream` endpoints.
+3.  **No Auth by Default**: The worker itself does not implement authentication logic to keep the code lightweight and offload security to the Cloudflare edge.
 
 ## Inspiration & Thanks
 
@@ -44,7 +53,10 @@ Since the Cloudflare Workers Free Plan has a **10ms CPU limit** and a **50-subre
 ## Setup
 
 1.  **Configure `wrangler.toml`**: Add your `account_id` and `ADBLOCK_KV` namespace ID.
-2.  **API Token**: Create a Cloudflare API Token with `Zero Trust: Edit` and `Account Settings: Read` permissions.
+2.  **API Token**: Create a Cloudflare API Token with the following permissions:
+    - **Account** > **Zero Trust** > **Edit**
+    - **Account** > **Account Settings** > **Read**
+    - **Account** > **Workers Scripts** > **Edit** (Required for dynamic Cron management)
 3.  **Secrets**:
     ```bash
     npx wrangler secret put CLOUDFLARE_API_TOKEN
