@@ -23,12 +23,13 @@ This project was inspired by and built upon the logic and research of the follow
 
 ## How It Works
 
-ZeroAd breaks the synchronization process into four distinct phases across multiple Cron executions (default every 5 minutes):
+ZeroAd breaks the synchronization process into five distinct phases across multiple Cron executions:
 
-1.  **IDLE**: Checks if 24 hours have passed since the last run.
-2.  **DOWNLOADING**: Fetches and parses configured lists. Applies whitelisting, removes IP addresses, and deduplicates domains. Stores the result in Workers KV.
-3.  **UPDATING_LISTS**: Iteratively updates 5 Cloudflare Gateway lists per invocation (to stay within subrequest limits).
-4.  **UPDATING_POLICY**: Gathers all list IDs and updates a single DNS Policy in Zero Trust to block the synced domains.
+1.  **IDLE**: Checks if 24 hours have passed or if headers changed.
+2.  **DOWNLOADING**: Fetches and parses configured lists (defaulting to **uBO-et** and **OISD Small**). Applies whitelisting, removes IPs, and deduplicates.
+3.  **UPDATING_LISTS**: Iteratively updates Cloudflare Gateway lists (5 per run).
+4.  **UPDATING_POLICY**: Synchronizes the Gateway DNS policy with the current list IDs.
+5.  **CLEANING_UP**: Automatically deletes any legacy Gateway lists from previous runs that are no longer needed (e.g., if the total domain count decreased).
 
 ## Setup
 
@@ -61,4 +62,4 @@ ZeroAd breaks the synchronization process into four distinct phases across multi
 
 ## License
 
-MIT
+This project is licensed under the **GNU Affero General Public License v3 (AGPL v3)**. See the [LICENSE](LICENSE) file for the full license text.

@@ -1,3 +1,20 @@
+/**
+ * ZeroAd: Native Cloudflare Worker AdBlocker
+ * 
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ * 
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 export interface Bindings {
   ADBLOCK_KV: KVNamespace;
   CLOUDFLARE_API_TOKEN: string;
@@ -89,23 +106,35 @@ export async function fetchAdBlockList(
 
           if (domain.endsWith('^')) domain = domain.substring(0, domain.length - 1);
           
-          // Remove trailing dots (Cloudflare Gateway doesn't like them)
+          // Remove trailing dots
           while (domain.endsWith('.')) {
             domain = domain.substring(0, domain.length - 1);
           }
 
           domain = domain.toLowerCase().trim();
 
-          // Final validation: 
-          // 1. No paths, no wildcards
-          // 2. MUST NOT BE AN IP ADDRESS (Cloudflare DOMAIN lists reject IPs)
-          const isIP = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(domain);
+          // Final validation
+          // 1. MUST NOT be an IP address or partial IP (Cloudflare DOMAIN lists reject them)
+          const isAllNumAndDots = /^[0-9.]+$/.test(domain);
+          const isValidIPv4 = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(domain);
+          
+          // 2. Basic domain structure: at least one label, no empty labels, no labels > 63 chars
+          const labels = domain.split('.');
+          const hasInvalidLabel = labels.some(l => l.length === 0 || l.length > 63 || !/^[a-z0-9-]/.test(l) || !/[a-z0-9]$/.test(l));
 
-          if (domain && !domain.includes('/') && !domain.includes('*') && !isIP) {
-            if (isAllowed) {
-              allowed.add(domain);
+          if (domain && !domain.includes('/') && !domain.includes('*') && !hasInvalidLabel) {
+            // Reject if it's just numbers and dots but NOT a valid IP (like 158.247.208)
+            // Or if it IS a valid IP (Cloudflare wants IP type for those)
+            if (isAllNumAndDots && !isValidIPv4) {
+                // Skip partial IPs
+            } else if (isValidIPv4) {
+                // Skip full IPs (require IP list type)
             } else {
-              blocked.add(domain);
+                if (isAllowed) {
+                  allowed.add(domain);
+                } else {
+                  blocked.add(domain);
+                }
             }
           }
         }
@@ -293,4 +322,28 @@ export async function updateGatewayPolicy(
     }
     void createRes.body?.cancel();
   }
+}
+
+export async function deleteGatewayList(
+  accountId: string,
+  apiToken: string,
+  listId: string
+): Promise<boolean> {
+  const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/gateway/lists/${listId}`;
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `Bearer ${apiToken}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    console.error(`Failed to delete list ${listId}: ${response.statusText}`);
+    void response.body?.cancel();
+    return false;
+  }
+
+  void response.body?.cancel();
+  return true;
 }
