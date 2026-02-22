@@ -11,6 +11,7 @@ import { FetchResult } from "./api";
 export async function fetchAdBlockList(
   urls: string[],
   currentMetadata: Record<string, string> = {},
+  onProgress?: (msg: string, type?: string) => Promise<void>,
 ): Promise<FetchResult> {
   const newMetadata: Record<string, string> = {};
   let anyChanged = false;
@@ -45,20 +46,23 @@ export async function fetchAdBlockList(
   const allowed = new Set<string>();
 
   for (const url of urls) {
-    console.log(`Fetching and parsing: ${url}`);
+    if (onProgress) await onProgress(`📡 Fetching: ${url.split("/").pop()}`, "meta");
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; ZeroAd/1.0; +https://github.com/lepikj/ZeroAd)",
+        },
+      });
+      
       if (!response.ok) {
-        console.error(`Failed to fetch ${url}: ${response.statusText}`);
+        const errorMsg = `❌ Failed to fetch ${url}: ${response.statusText}`;
+        if (onProgress) await onProgress(errorMsg, "error");
+        console.error(errorMsg);
         continue;
       }
 
-      if (!response.body) {
-        console.error(`No response body for ${url}`);
-        continue;
-      }
+      if (!response.body) continue;
 
-      // Use a streaming approach to process line-by-line
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let partialLine = "";
@@ -80,7 +84,9 @@ export async function fetchAdBlockList(
         processLine(partialLine, blocked, allowed);
       }
     } catch (e: any) {
-      console.error(`Error processing ${url}: ${e.message}`);
+      const errorMsg = `❌ Error processing ${url}: ${e.message}`;
+      if (onProgress) await onProgress(errorMsg, "error");
+      console.error(errorMsg);
     }
   }
 

@@ -119,6 +119,7 @@ export class SyncEngine {
       const result = await fetchAdBlockList(
         urls,
         forceUpdate ? {} : currentMetadata,
+        onProgress,
       );
 
       if (!result.updated) {
