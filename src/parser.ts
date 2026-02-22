@@ -53,103 +53,31 @@ export async function fetchAdBlockList(
         continue;
       }
 
-      const text = await response.text();
-      const lines = text.split("\n");
+      if (!response.body) {
+        console.error(`No response body for ${url}`);
+        continue;
+      }
 
-      for (let line of lines) {
-        line = line.trim();
-        if (
-          !line ||
-          line.startsWith("!") ||
-          line.startsWith("#") ||
-          line.startsWith("[") ||
-          line.startsWith("!#")
-        ) {
-          continue;
+      // Use a streaming approach to process line-by-line
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let partialLine = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = (partialLine + chunk).split("\n");
+        partialLine = lines.pop() || "";
+
+        for (const line of lines) {
+          processLine(line, blocked, allowed);
         }
+      }
 
-        // Skip cosmetic filters and complex uBO syntax
-        if (
-          line.includes("##") ||
-          line.includes("#@#") ||
-          line.includes("#$#") ||
-          line.includes("#?#")
-        ) {
-          continue;
-        }
-
-        let domain = "";
-        let isAllowed = false;
-
-        if (line.startsWith("@@||")) {
-          isAllowed = true;
-          domain = line.substring(4);
-        } else if (line.startsWith("||")) {
-          domain = line.substring(2);
-        } else if (
-          line.startsWith("0.0.0.0 ") ||
-          line.startsWith("127.0.0.1 ")
-        ) {
-          domain = line.split(/\s+/)[1];
-        } else if (
-          /^[a-zA-Z0-9]/.test(line) &&
-          !line.includes("/") &&
-          !line.includes(" ")
-        ) {
-          // Pure domain name line
-          domain = line;
-        }
-
-        if (domain) {
-          // Clean up domain
-          const optionsIndex = domain.indexOf("$");
-          if (optionsIndex !== -1) domain = domain.substring(0, optionsIndex);
-
-          if (domain.endsWith("^")) {
-            domain = domain.substring(0, domain.length - 1);
-          }
-
-          // Remove trailing dots
-          while (domain.endsWith(".")) {
-            domain = domain.substring(0, domain.length - 1);
-          }
-
-          domain = domain.toLowerCase().trim();
-
-          // Final validation
-          // 1. MUST NOT be an IP address or partial IP
-          const isAllNumAndDots = /^[0-9.]+$/.test(domain);
-          const isValidIPv4 = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(domain);
-
-          // 2. Basic domain structure
-          const labels = domain.split(".");
-          const hasInvalidLabel = labels.some(
-            (l) =>
-              l.length === 0 ||
-              l.length > 63 ||
-              !/^[a-z0-9-]/.test(l) ||
-              !/[a-z0-9]$/.test(l),
-          );
-
-          if (
-            domain &&
-            !domain.includes("/") &&
-            !domain.includes("*") &&
-            !hasInvalidLabel
-          ) {
-            if (isAllNumAndDots && !isValidIPv4) {
-              // Skip partial IPs
-            } else if (isValidIPv4) {
-              // Skip full IPs
-            } else {
-              if (isAllowed) {
-                allowed.add(domain);
-              } else {
-                blocked.add(domain);
-              }
-            }
-          }
-        }
+      if (partialLine) {
+        processLine(partialLine, blocked, allowed);
       }
     } catch (e: any) {
       console.error(`Error processing ${url}: ${e.message}`);
@@ -162,4 +90,78 @@ export async function fetchAdBlockList(
     allowed,
     metadata: newMetadata,
   };
+}
+
+/**
+ * Processes a single line from a blocklist.
+ * Optimized for minimal CPU usage.
+ */
+function processLine(line: string, blocked: Set<string>, allowed: Set<string>) {
+  const trimmed = line.trim();
+  
+  // Fast skip for comments and empty lines
+  if (!trimmed || trimmed[0] === "!" || trimmed[0] === "#" || trimmed[0] === "[" || (trimmed[0] === "!" && trimmed[1] === "#")) {
+    return;
+  }
+
+  // Skip cosmetic filters and complex uBO syntax (most common heavy patterns)
+  if (trimmed.includes("##") || trimmed.includes("#@#") || trimmed.includes("#$#") || trimmed.includes("#?#")) {
+    return;
+  }
+
+  let domain = "";
+  let isAllowed = false;
+
+  if (trimmed.startsWith("@@||")) {
+    isAllowed = true;
+    domain = trimmed.substring(4);
+  } else if (trimmed.startsWith("||")) {
+    domain = trimmed.substring(2);
+  } else if (trimmed.startsWith("0.0.0.0 ")) {
+    domain = trimmed.substring(8).trim();
+  } else if (trimmed.startsWith("127.0.0.1 ")) {
+    domain = trimmed.substring(10).trim();
+  } else if (/^[a-zA-Z0-9]/.test(trimmed) && !trimmed.includes("/") && !trimmed.includes(" ")) {
+    domain = trimmed;
+  }
+
+  if (domain) {
+    // Clean up domain: remove options like $third-party
+    const optionsIndex = domain.indexOf("$");
+    if (optionsIndex !== -1) domain = domain.substring(0, optionsIndex);
+
+    // Remove trailing syntax like ^
+    if (domain.endsWith("^")) domain = domain.substring(0, domain.length - 1);
+
+    // Remove trailing dots
+    while (domain.endsWith(".")) {
+      domain = domain.substring(0, domain.length - 1);
+    }
+
+    domain = domain.toLowerCase().trim();
+
+    // Final validation
+    if (!domain || domain.includes("/") || domain.includes("*")) return;
+
+    // 1. MUST NOT be an IP address or partial IP
+    const isAllNumAndDots = /^[0-9.]+$/.test(domain);
+    if (isAllNumAndDots) {
+      const isValidIPv4 = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(domain);
+      if (isValidIPv4 || domain.split(".").length < 4) return;
+    }
+
+    // 2. Basic domain structure: no empty labels, no labels > 63 chars
+    const labels = domain.split(".");
+    for (const l of labels) {
+      if (l.length === 0 || l.length > 63 || !/^[a-z0-9-]/.test(l) || !/[a-z0-9]$/.test(l)) {
+        return;
+      }
+    }
+
+    if (isAllowed) {
+      allowed.add(domain);
+    } else {
+      blocked.add(domain);
+    }
+  }
 }
