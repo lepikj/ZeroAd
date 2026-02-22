@@ -143,17 +143,24 @@ function processLine(line: string, blocked: Set<string>, allowed: Set<string>) {
     // Final validation
     if (!domain || domain.includes("/") || domain.includes("*")) return;
 
-    // 1. MUST NOT be an IP address or partial IP
-    const isAllNumAndDots = /^[0-9.]+$/.test(domain);
-    if (isAllNumAndDots) {
-      const isValidIPv4 = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(domain);
-      if (isValidIPv4 || domain.split(".").length < 4) return;
-    }
+    // 1. MUST NOT be an IP address (Cloudflare DOMAIN lists reject them)
+    // We skip anything that is a valid IPv4
+    const isValidIPv4 = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(domain);
+    if (isValidIPv4) return;
 
-    // 2. Basic domain structure: no empty labels, no labels > 63 chars
+    // 2. MUST NOT be a partial IP or numeric-only domain
+    // (Cloudflare rejects domains that are just numbers and dots)
+    if (/^[0-9.]+$/.test(domain)) return;
+
+    // 3. Basic domain structure: no empty labels, no labels > 63 chars
     const labels = domain.split(".");
     for (const l of labels) {
-      if (l.length === 0 || l.length > 63 || !/^[a-z0-9-]/.test(l) || !/[a-z0-9]$/.test(l)) {
+      if (
+        l.length === 0 ||
+        l.length > 63 ||
+        !/^[a-z0-9-]/.test(l) ||
+        !/[a-z0-9]$/.test(l)
+      ) {
         return;
       }
     }

@@ -302,23 +302,31 @@ export class SyncEngine {
         return !isNaN(index) && index > meta.total;
       });
 
-      for (const list of toDelete) {
-        const delMsg = `🗑️ Deleting legacy list: ${list.name}`;
+      console.log(`Found ${toDelete.length} old lists to delete.`);
+
+      // Delete in small batches to stay under subrequest limits
+      for (let i = 0; i < toDelete.length; i++) {
+        const list = toDelete[i];
+        const delMsg = `🗑️ Deleting legacy list: ${list.name} (${i + 1}/${toDelete.length})`;
         if (onProgress) await onProgress(delMsg, "meta");
         console.log(delMsg);
+        
         await deleteGatewayList(
           this.env.CLOUDFLARE_ACCOUNT_ID,
           this.env.CLOUDFLARE_API_TOKEN,
           list.id,
         );
         deletedCount++;
+
+        // Every 5 deletes, update heartbeat and check subrequest risk
+        if (deletedCount % 5 === 0) await this.updateHeartbeat();
       }
     }
 
     await this.env.ADBLOCK_KV.put(KV_KEYS.STATUS, "IDLE");
     await this.env.ADBLOCK_KV.put(KV_KEYS.LAST_RUN, Date.now().toString());
     await this.clearHeartbeat();
-    
+
     const doneMsg = `✨ Cycle Complete! All synchronized. Deleted ${deletedCount} legacy lists (${Date.now() - startTime}ms).`;
     if (onProgress) await onProgress(doneMsg, "success");
     console.log(doneMsg);

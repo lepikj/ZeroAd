@@ -47,7 +47,7 @@ export const KV_KEYS = {
 
 // Logic Constants
 export const CONFIG = {
-  BATCH_SIZE: 3,
+  BATCH_SIZE: 5,
   HEARTBEAT_TTL_MS: 120000, // 2 minutes
   SYNC_INTERVAL_MS: 24 * 60 * 60 * 1000, // 24 hours
 };
