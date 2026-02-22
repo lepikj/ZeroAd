@@ -17,7 +17,6 @@
 
 import {
   Bindings,
-  fetchAdBlockList,
   getGatewayLists,
   createOrUpdateGatewayList,
   updateGatewayPolicy,
@@ -25,6 +24,8 @@ import {
   getSchedules,
   updateSchedules,
 } from "./api";
+import { fetchAdBlockList } from "./parser";
+import { renderDashboard, renderSettings, getStreamHeader } from "./ui";
 
 // KV Key Constants
 const KV_KEY_STATUS = "status";
@@ -37,7 +38,6 @@ const KV_KEY_CUSTOM_URLS = "config_urls";
 
 // Processing Constants
 const BATCH_SIZE = 5;
-const CHUNK_PREFIX = "AdBlock_Worker_";
 
 /**
  * Phase 1: Download blocklists and process them into chunks.
@@ -50,7 +50,6 @@ async function handleDownloading(env: Bindings, forceUpdate: boolean = false) {
     const metadataStr = await env.ADBLOCK_KV.get(KV_KEY_METADATA);
     const currentMetadata = metadataStr ? JSON.parse(metadataStr) : {};
 
-    // Use KV override if exists, otherwise fallback to env
     const rawUrls =
       (await env.ADBLOCK_KV.get(KV_KEY_CUSTOM_URLS)) || env.ADBLOCK_LIST_URLS;
     const urls = rawUrls
@@ -64,31 +63,22 @@ async function handleDownloading(env: Bindings, forceUpdate: boolean = false) {
     );
 
     if (!result.updated) {
-      console.log(
-        "No changes detected in source lists. Skipping update cycle.",
-      );
+      console.log("No changes detected. Skipping update cycle.");
       await env.ADBLOCK_KV.put(KV_KEY_STATUS, "IDLE");
       await env.ADBLOCK_KV.put(KV_KEY_LAST_RUN, Date.now().toString());
       return;
     }
 
     const { blocked, allowed, metadata } = result;
-    console.log(
-      `Changes detected. Processing ${blocked!.size} blocked domains and ${allowed!.size} allowed domains.`,
-    );
-
     for (const domain of allowed!) {
       blocked!.delete(domain);
     }
 
     const finalDomains = Array.from(blocked!);
-    console.log(`Final list size after whitelisting: ${finalDomains.length}`);
-
     const maxItems = parseInt(env.MAX_ITEMS_PER_LIST) || 1000;
     const totalChunks = Math.ceil(finalDomains.length / maxItems);
-    const fullListStr = finalDomains.join("\n");
 
-    await env.ADBLOCK_KV.put("FULL_LIST", fullListStr);
+    await env.ADBLOCK_KV.put("FULL_LIST", finalDomains.join("\n"));
     await env.ADBLOCK_KV.put(KV_KEY_METADATA, JSON.stringify(metadata));
     await env.ADBLOCK_KV.put(
       KV_KEY_CHUNKS_META,
@@ -140,18 +130,14 @@ async function handleUpdatingLists(
   let processedCount = 0;
 
   while (processedCount < BATCH_SIZE && meta.current < meta.total) {
-    if (meta.current >= maxLists) {
-      console.warn(`Reached max lists limit (${maxLists}).`);
-      break;
-    }
+    if (meta.current >= maxLists) break;
 
     const chunkIndex = meta.current;
-    const start = chunkIndex * maxItems;
-    const end = start + maxItems;
-    const chunkItems = allDomains.slice(start, end);
+    const chunkItems = allDomains.slice(
+      chunkIndex * maxItems,
+      (chunkIndex + 1) * maxItems,
+    );
     const listName = `${env.LIST_PREFIX}${chunkIndex + 1}`;
-
-    console.log(`Updating list ${listName} (${chunkItems.length} items)...`);
 
     try {
       const existingId = existingListsMap
@@ -164,10 +150,7 @@ async function handleUpdatingLists(
         chunkItems,
         existingId,
       );
-
-      if (id && !listIds.includes(id)) {
-        listIds.push(id);
-      }
+      if (id && !listIds.includes(id)) listIds.push(id);
     } catch (e: any) {
       console.error(`Failed to update list ${listName}: ${e.message}`);
     }
@@ -180,100 +163,73 @@ async function handleUpdatingLists(
   await env.ADBLOCK_KV.put(KV_KEY_LIST_IDS, JSON.stringify(listIds));
 
   if (meta.current >= meta.total || meta.current >= maxLists) {
-    console.log("All lists updated. Moving to UPDATING_POLICY.");
     await env.ADBLOCK_KV.put(KV_KEY_STATUS, "UPDATING_POLICY");
-  } else {
-    console.log(`Batch complete. Progress: ${meta.current}/${meta.total}`);
   }
 }
 
 /**
- * Phase 3: Apply the list IDs to the Gateway Policy.
+ * Phase 3: Apply policy.
  */
 async function handleUpdatingPolicy(env: Bindings) {
   await env.ADBLOCK_KV.put(KV_KEY_HEARTBEAT, Date.now().toString());
-  console.log("Updating Gateway Policy...");
-
   const listIdsStr = await env.ADBLOCK_KV.get(KV_KEY_LIST_IDS);
   const listIds: string[] = listIdsStr ? JSON.parse(listIdsStr) : [];
 
-  if (listIds.length === 0) {
-    await env.ADBLOCK_KV.put(KV_KEY_STATUS, "IDLE");
-    return;
+  if (listIds.length > 0) {
+    try {
+      await updateGatewayPolicy(
+        env.CLOUDFLARE_ACCOUNT_ID,
+        env.CLOUDFLARE_API_TOKEN,
+        "Block Ads (Managed by Worker)",
+        listIds,
+      );
+    } catch (e: any) {
+      console.error(`Policy update failed: ${e.message}`);
+    }
   }
-
-  try {
-    await updateGatewayPolicy(
-      env.CLOUDFLARE_ACCOUNT_ID,
-      env.CLOUDFLARE_API_TOKEN,
-      "Block Ads (Managed by Worker)",
-      listIds,
-    );
-    console.log("Policy updated successfully.");
-  } catch (e: any) {
-    console.error(`Policy update failed: ${e.message}`);
-  }
-
   await env.ADBLOCK_KV.put(KV_KEY_STATUS, "CLEANING_UP");
 }
 
 /**
- * Phase 4: Delete any Gateway lists that are no longer needed.
+ * Phase 4: Cleanup.
  */
 async function handleCleanup(env: Bindings) {
   await env.ADBLOCK_KV.put(KV_KEY_HEARTBEAT, Date.now().toString());
-  console.log("Cleaning up old lists...");
-
   const metaStr = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
-  if (!metaStr) {
-    await env.ADBLOCK_KV.put(KV_KEY_STATUS, "IDLE");
-    return;
-  }
-
-  const meta = JSON.parse(metaStr);
-  const maxUsedIndex = meta.total;
-  const allLists = await getGatewayLists(
-    env.CLOUDFLARE_ACCOUNT_ID,
-    env.CLOUDFLARE_API_TOKEN,
-  );
-  const toDelete = allLists.filter((l) => {
-    if (!l.name.startsWith(env.LIST_PREFIX)) return false;
-    const indexPart = l.name.substring(env.LIST_PREFIX.length);
-    const index = parseInt(indexPart);
-    return !isNaN(index) && index > maxUsedIndex;
-  });
-
-  console.log(`Found ${toDelete.length} old lists to delete.`);
-
-  for (const list of toDelete) {
-    console.log(`Deleting list: ${list.name} (${list.id})`);
-    await deleteGatewayList(
+  if (metaStr) {
+    const meta = JSON.parse(metaStr);
+    const allLists = await getGatewayLists(
       env.CLOUDFLARE_ACCOUNT_ID,
       env.CLOUDFLARE_API_TOKEN,
-      list.id,
     );
+    const toDelete = allLists.filter((l) => {
+      if (!l.name.startsWith(env.LIST_PREFIX)) return false;
+      const index = parseInt(l.name.substring(env.LIST_PREFIX.length));
+      return !isNaN(index) && index > meta.total;
+    });
+
+    for (const list of toDelete) {
+      await deleteGatewayList(
+        env.CLOUDFLARE_ACCOUNT_ID,
+        env.CLOUDFLARE_API_TOKEN,
+        list.id,
+      );
+    }
   }
 
   await env.ADBLOCK_KV.put(KV_KEY_STATUS, "IDLE");
   await env.ADBLOCK_KV.put(KV_KEY_LAST_RUN, Date.now().toString());
   await env.ADBLOCK_KV.delete(KV_KEY_HEARTBEAT);
-  console.log("Cleanup complete. Cycle finished.");
 }
 
 export default {
-  /**
-   * Cron Handler
-   */
   async scheduled(
     event: ScheduledEvent,
     env: Bindings,
     ctx: ExecutionContext,
   ): Promise<void> {
     const lastHeartbeat = await env.ADBLOCK_KV.get(KV_KEY_HEARTBEAT);
-    if (lastHeartbeat && Date.now() - parseInt(lastHeartbeat) < 120000) {
-      console.log("Another worker is active. Skipping cron run.");
-      return;
-    }
+    if (lastHeartbeat && Date.now() - parseInt(lastHeartbeat) < 120000) return;
 
     const status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
     if (status === "IDLE") {
@@ -299,9 +255,6 @@ export default {
     }
   },
 
-  /**
-   * HTTP Handler
-   */
   async fetch(
     request: Request,
     env: Bindings,
@@ -314,15 +267,9 @@ export default {
     if (request.method === "GET" && path === "/") {
       const status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
       const metaStr = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
-      const meta = metaStr ? JSON.parse(metaStr) : null;
       const listsStr = await env.ADBLOCK_KV.get(KV_KEY_LIST_IDS);
-      const lists = listsStr ? JSON.parse(listsStr) : [];
       const metadataStr = await env.ADBLOCK_KV.get(KV_KEY_METADATA);
-      const metadata = metadataStr ? JSON.parse(metadataStr) : {};
       const lastRun = await env.ADBLOCK_KV.get(KV_KEY_LAST_RUN);
-      const lastRunDate = lastRun
-        ? new Date(parseInt(lastRun)).toLocaleString()
-        : "Never";
 
       const rawUrls =
         (await env.ADBLOCK_KV.get(KV_KEY_CUSTOM_URLS)) || env.ADBLOCK_LIST_URLS;
@@ -330,25 +277,27 @@ export default {
         .split(",")
         .map((u) => u.trim())
         .filter((u) => u);
+      const metadata = metadataStr ? JSON.parse(metadataStr) : {};
 
-      // Fetch Live Status & Schedules
       const [sourceStatuses, schedules] = await Promise.all([
         Promise.all(
-          urls.map(async (url) => {
+          urls.map(async (u) => {
             try {
-              const res = await fetch(url, { method: "HEAD" });
+              const res = await fetch(u, { method: "HEAD" });
               const currentEtag =
                 res.headers.get("etag") ||
                 res.headers.get("last-modified") ||
                 "unknown";
-              const storedEtag = metadata[url];
-              const hasUpdate = storedEtag && storedEtag !== currentEtag;
-              const name = url.split("/").pop() || url;
-              return { url, name, hasUpdate, currentEtag, storedEtag };
+              const storedEtag = metadata[u];
+              return {
+                name: u.split("/").pop(),
+                hasUpdate: storedEtag && storedEtag !== currentEtag,
+                currentEtag,
+                storedEtag,
+              };
             } catch (e) {
               return {
-                url,
-                name: url.split("/").pop() || url,
+                name: u.split("/").pop(),
                 error: true,
                 currentEtag: "error",
               };
@@ -362,117 +311,22 @@ export default {
         ),
       ]);
 
-      const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <title>ZeroAd Dashboard</title>
-                    <style>
-                      body { background: #121212; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 32px; line-height: 1.4; max-width: 900px; margin: 0 auto; font-size: 13px; }
-                      h1 { color: #64b5f6; border-bottom: 1px solid #333; padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center; font-size: 20px; }
-                      .card { background: #1e1e1e; border: 1px solid #333; padding: 20px; border-radius: 12px; margin-bottom: 24px; }
-                      .stat { margin-bottom: 10px; font-size: 14px; }
-                      .label { color: #9e9e9e; font-weight: bold; min-width: 140px; display: inline-block; }
-                      .value { color: #81c784; }
-                      .status-value { color: #64b5f6; font-weight: bold; text-transform: uppercase; background: rgba(100, 181, 246, 0.1); padding: 2px 8px; border-radius: 4px; }
-                      .btn { display: inline-block; padding: 10px 20px; margin-right: 12px; margin-bottom: 12px; border-radius: 6px; text-decoration: none; font-weight: bold; cursor: pointer; transition: all 0.2s; border: none; font-size: 13px; }
-                      .btn-primary { background: #64b5f6; color: #121212; }
-                      .btn-secondary { background: #4db6ac; color: #121212; }
-                      .btn-danger { background: transparent; color: #ef5350; border: 1px solid #ef5350; }
-                      .btn:hover { opacity: 0.8; transform: translateY(-1px); }
-                      
-                      .source-table { width: 100%; border-collapse: collapse; margin-top: 8px; background: #181818; border-radius: 8px; overflow: hidden; }
-                      .source-table th, .source-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #222; }
-                      .source-table th { background: #222; color: #9e9e9e; font-size: 11px; text-transform: uppercase; }
-                      .badge { padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; text-transform: uppercase; border: 1px solid; }
-                      .badge-ok { background: rgba(129, 199, 132, 0.1); color: #81c784; border-color: #81c784; }
-                      .badge-update { background: rgba(255, 183, 77, 0.1); color: #ffb74d; border-color: #ffb74d; }
-                      .badge-new { background: rgba(100, 181, 246, 0.1); color: #64b5f6; border-color: #64b5f6; }
-                      .etag { font-size: 10px; color: #666; font-family: monospace; }
-                      .settings-link { font-size: 13px; color: #9e9e9e; text-decoration: none; border: 1px solid #333; padding: 4px 12px; border-radius: 18px; }
-                      .settings-link:hover { background: #333; color: #fff; }
-                    </style>
-        </head>
-        <body>
-          <h1>
-            <span>🛡️ ZeroAd Dashboard</span>
-            <a href="/settings" class="settings-link">⚙️ Settings</a>
-          </h1>
-          
-          <div class="card">
-            <div class="stat"><span class="label">Work Status:</span> <span class="status-value">${status}</span></div>
-            <div class="stat"><span class="label">Automation:</span> <span class="value">${schedules.length > 0 ? `ACTIVE (${schedules.join(", ")})` : "DISABLED"}</span></div>
-            <div class="stat"><span class="label">Last Sync:</span> <span class="value">${lastRunDate}</span></div>
-            <div class="stat"><span class="label">Active Lists:</span> <span class="value">${lists.length} chunks registered</span></div>
-            ${meta ? `<div class="stat"><span class="label">Progress:</span> <span class="value">${meta.current} / ${meta.total} chunks</span></div>` : ""}
-          </div>
-
-          <div class="card">
-            <div class="label" style="margin-bottom: 12px; display: block; font-size: 16px; color: #e0e0e0;">Source Blocklists</div>
-            <table class="source-table">
-              <thead><tr><th>List Name</th><th>Status</th><th>Current Header</th></tr></thead>
-              <tbody>
-                ${sourceStatuses
-                  .map((s) => {
-                    let badge = s.error
-                      ? '<span class="badge badge-update">ERROR</span>'
-                      : !s.storedEtag
-                        ? '<span class="badge badge-new">NEW</span>'
-                        : s.hasUpdate
-                          ? '<span class="badge badge-update">UPDATE AVAILABLE</span>'
-                          : '<span class="badge badge-ok">CURRENT</span>';
-                    const headerStyle = s.hasUpdate
-                      ? "color: #ef5350; font-weight: bold;"
-                      : "";
-                    return `<tr>
-                      <td><div style="font-weight: bold; color: #64b5f6;">${s.name}</div></td>
-                      <td>${badge}</td>
-                      <td><span class="etag" style="${headerStyle}">${s.currentEtag}</span></td>
-                    </tr>`;
-                  })
-                  .join("")}
-              </tbody>
-            </table>
-          </div>
-
-          <div class="actions">
-            <div style="margin-bottom: 16px; font-size: 13px; user-select: none; background: #1a1a1a; padding: 8px; border-radius: 8px;">
-              <label style="cursor: pointer; color: #ffb74d;">
-                <input type="checkbox" id="force-toggle"> Force Refresh Source Lists (Ignore ETags)
-              </label>
-            </div>
-            <a href="/stream" id="btn-stream" class="btn btn-primary">🚀 Run Full Sync Dashboard</a>
-            <a href="/run" id="btn-run" class="btn btn-secondary">⏯️ Run Next Batch</a>
-            <a href="/reset" class="btn btn-danger" onclick="return confirm('Wipe all progress?')">⚠️ Reset State</a>
-          </div>
-
-          <script>
-            const toggle = document.getElementById('force-toggle');
-            const streamBtn = document.getElementById('btn-stream');
-            const runBtn = document.getElementById('btn-run');
-            toggle.addEventListener('change', () => {
-              const isForce = toggle.checked;
-              streamBtn.href = isForce ? '/stream?force=true' : '/stream';
-              runBtn.href = isForce ? '/run?force=true' : '/run';
-              if (isForce) {
-                streamBtn.innerHTML = '🔥 Run Full Sync (Forced)';
-                streamBtn.style.background = '#ffb74d';
-              } else {
-                streamBtn.innerHTML = '🚀 Run Full Sync Dashboard';
-                streamBtn.style.background = '#64b5f6';
-              }
-            });
-          </script>
-        </body>
-        </html>
-      `;
-      return new Response(html, {
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-      });
+      return new Response(
+        renderDashboard({
+          status,
+          lastRun: lastRun
+            ? new Date(parseInt(lastRun)).toLocaleString()
+            : "Never",
+          listsCount: listsStr ? JSON.parse(listsStr).length : 0,
+          progress: metaStr ? JSON.parse(metaStr) : undefined,
+          sourceStatuses,
+          metadata,
+        }),
+        { headers: { "Content-Type": "text/html; charset=utf-8" } },
+      );
     }
 
-    // --- Settings Page ---
+    // --- Settings ---
     if (request.method === "GET" && path === "/settings") {
       const customUrls = await env.ADBLOCK_KV.get(KV_KEY_CUSTOM_URLS);
       const schedules = await getSchedules(
@@ -480,166 +334,52 @@ export default {
         env.SCRIPT_NAME,
         env.CLOUDFLARE_API_TOKEN,
       );
-      const currentCron = schedules[0] || "";
-
-      const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <title>ZeroAd Settings</title>
-          <style>
-            body { background: #121212; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 32px; line-height: 1.4; max-width: 800px; margin: 0 auto; font-size: 13px; }
-            h1 { color: #64b5f6; border-bottom: 1px solid #333; padding-bottom: 8px; font-size: 20px; }
-            .card { background: #1e1e1e; border: 1px solid #333; padding: 20px; border-radius: 10px; margin-bottom: 24px; }
-            .form-group { margin-bottom: 16px; }
-            label { display: block; color: #9e9e9e; margin-bottom: 6px; font-weight: bold; }
-            textarea, input[type="text"] { width: 100%; background: #121212; border: 1px solid #333; color: #fff; padding: 10px; border-radius: 5px; font-family: inherit; box-sizing: border-box; font-size: 13px; }
-            .btn { display: inline-block; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; cursor: pointer; border: none; font-size: 13px; }
-            .btn-primary { background: #64b5f6; color: #121212; }
-            .back-link { color: #9e9e9e; text-decoration: none; margin-bottom: 16px; display: inline-block; font-size: 13px; }
-            .hint { font-size: 11px; color: #666; margin-top: 4px; }
-          </style>
-        </head>
-        <body>
-          <a href="/" class="back-link">← Back to Dashboard</a>
-          <h1>⚙️ ZeroAd Settings</h1>
-          
-          <form method="POST" action="/settings">
-            <div class="card">
-              <div class="form-group">
-                <label>Source List URLs (Comma-separated)</label>
-                <textarea name="urls" rows="5" placeholder="https://example.com/list.txt">${customUrls || env.ADBLOCK_LIST_URLS}</textarea>
-                <div class="hint">Leave empty to use the defaults from wrangler.toml</div>
-              </div>
-
-              <div class="form-group">
-                <label>Cron Schedule</label>
-                <input type="text" name="cron" value="${currentCron}" placeholder="*/5 * * * *">
-                <div class="hint">Standard cron expression (e.g., "0 0 * * *" for daily). Leave empty to disable automation.</div>
-              </div>
-
-              <button type="submit" class="btn btn-primary">💾 Save Configuration</button>
-            </div>
-          </form>
-        </body>
-        </html>
-      `;
-      return new Response(html, {
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-      });
+      return new Response(
+        renderSettings({
+          customUrls,
+          defaultUrls: env.ADBLOCK_LIST_URLS,
+          currentCron: schedules[0] || "",
+        }),
+        { headers: { "Content-Type": "text/html; charset=utf-8" } },
+      );
     }
 
     if (request.method === "POST" && path === "/settings") {
       const formData = await request.formData();
       const urls = formData.get("urls")?.toString().trim();
       const cron = formData.get("cron")?.toString().trim();
-
-      if (urls) {
-        await env.ADBLOCK_KV.put(KV_KEY_CUSTOM_URLS, urls);
-      } else {
-        await env.ADBLOCK_KV.delete(KV_KEY_CUSTOM_URLS);
-      }
-
-      const crons = cron ? [cron] : [];
+      if (urls) await env.ADBLOCK_KV.put(KV_KEY_CUSTOM_URLS, urls);
+      else await env.ADBLOCK_KV.delete(KV_KEY_CUSTOM_URLS);
       await updateSchedules(
         env.CLOUDFLARE_ACCOUNT_ID,
         env.SCRIPT_NAME,
         env.CLOUDFLARE_API_TOKEN,
-        crons,
+        cron ? [cron] : [],
       );
-
       return Response.redirect(url.origin + "/", 302);
     }
 
-    // --- JSON Status ---
-    if (request.method === "GET" && path === "/status.json") {
-      const status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
-      const meta = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
-      const lists = await env.ADBLOCK_KV.get(KV_KEY_LIST_IDS);
-      const metadata = await env.ADBLOCK_KV.get(KV_KEY_METADATA);
-      const lastRun = await env.ADBLOCK_KV.get(KV_KEY_LAST_RUN);
-      return new Response(
-        JSON.stringify(
-          {
-            status,
-            meta: meta ? JSON.parse(meta) : null,
-            lists_count: lists ? JSON.parse(lists).length : 0,
-            last_run: lastRun,
-            sources: metadata ? JSON.parse(metadata) : {},
-          },
-          null,
-          2,
-        ),
-        { headers: { "Content-Type": "application/json" } },
-      );
-    }
-
-    // --- Streaming Dashboard ---
+    // --- Stream ---
     if (request.method === "GET" && path === "/stream") {
       const { readable, writable } = new TransformStream();
       const writer = writable.getWriter();
       const encoder = new TextEncoder();
       const force = url.searchParams.get("force") === "true";
       const write = async (msg: string, className: string = "") => {
-        const div = className
-          ? `<div class="${className}">${msg}</div>`
-          : `<div>${msg}</div>`;
-        await writer.write(encoder.encode(div + "\n"));
+        await writer.write(
+          encoder.encode(
+            (className
+              ? `<div class="${className}">${msg}</div>`
+              : `<div>${msg}</div>`) + "\n",
+          ),
+        );
       };
 
       ctx.waitUntil(
         (async () => {
           try {
-            await writer.write(
-              encoder.encode(`
-            <!DOCTYPE html>
-            <html>
-            <head>
-              <meta charset="utf-8">
-              <title>ZeroAd Sync Stream</title>
-              <style>
-                body { background: #121212; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 80px 16px 16px 16px; line-height: 1.3; font-size: 13px; }
-                #progress-container { position: fixed; top: 0; left: 0; width: 100%; background: #1e1e1e; padding: 12px 16px; border-bottom: 1px solid #333; z-index: 1000; box-sizing: border-box; }
-                progress { width: 100%; height: 10px; appearance: none; border: none; }
-                progress::-webkit-progress-bar { background-color: #333; border-radius: 5px; }
-                progress::-webkit-progress-value { background-color: #64b5f6; border-radius: 5px; transition: width 0.5s ease; }
-                .info { color: #81c784; }
-                .status { color: #64b5f6; font-weight: bold; }
-                .warn { color: #ffb74d; font-weight: bold; }
-                .error { color: #ef5350; font-weight: bold; }
-                .success { color: #4db6ac; font-weight: bold; text-decoration: underline; }
-                .meta { color: #9e9e9e; font-style: italic; }
-                .back-link { float: right; color: #64b5f6; text-decoration: none; font-size: 11px; margin-top: 4px; }
-                .back-link:hover { text-decoration: underline; }
-                hr { border: 0; border-top: 1px solid #333; margin: 16px 0; }
-              </style>
-              <script>
-                function updateProgress(current, total) {
-                  const p = document.getElementById('sync-progress');
-                  const t = document.getElementById('progress-text');
-                  if (p && total > 0) {
-                    p.value = current; p.max = total;
-                    const pct = Math.round((current / total) * 100);
-                    t.innerText = 'Sync Progress: ' + pct + '% (' + current + '/' + total + ')';
-                  }
-                }
-              </script>
-            </head>
-            <body>
-            <div id="progress-container">
-              <a href="/" class="back-link">← Back to Dashboard</a>
-              <div id="progress-text" style="margin-bottom: 5px; font-size: 12px; color: #9e9e9e;">Initializing...</div>
-              <progress id="sync-progress" value="0" max="100"></progress>
-            </div>
-            <!-- 1KB Padding: ${" ".repeat(1024)} -->
-          `),
-            );
-
-            await write(
-              `🚀 Starting stream processing... (Force: ${force})`,
-              "info",
-            );
+            await writer.write(encoder.encode(getStreamHeader(force)));
+            await write(`🚀 Starting stream processing...`, "info");
             const lists = await getGatewayLists(
               env.CLOUDFLARE_ACCOUNT_ID,
               env.CLOUDFLARE_API_TOKEN,
@@ -647,55 +387,42 @@ export default {
             const existingMap: Record<string, string> = {};
             lists.forEach((l: any) => (existingMap[l.name] = l.id));
 
-            let subrequestCount = 1;
-            const SUBREQUEST_LIMIT = 40;
-            let status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
-            let cachedDomains: string[] | undefined;
-
-            while (subrequestCount < SUBREQUEST_LIMIT) {
-              status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
-              subrequestCount++;
+            let subrequests = 1;
+            while (subrequests < 40) {
+              const status =
+                (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
+              subrequests++;
               await write(
-                `📍 Phase: <span class="status">${status}</span> <span class="meta">(${subrequestCount}/${SUBREQUEST_LIMIT})</span>`,
+                `📍 Phase: <span class="status">${status}</span> <span class="meta">(${subrequests}/40)</span>`,
               );
 
               if (status === "IDLE") {
                 await env.ADBLOCK_KV.put(KV_KEY_STATUS, "DOWNLOADING");
-                status = "DOWNLOADING";
-              }
-
-              if (status === "DOWNLOADING") {
+              } else if (status === "DOWNLOADING") {
                 await handleDownloading(env, force);
                 if ((await env.ADBLOCK_KV.get(KV_KEY_STATUS)) === "IDLE") {
-                  await write("✅ No changes. Stream ending.", "success");
+                  await write("✅ No changes. Ending.", "success");
                   break;
                 }
-                const fullListStr = await env.ADBLOCK_KV.get("FULL_LIST");
-                if (fullListStr) cachedDomains = fullListStr.split("\n");
-                subrequestCount += 7;
+                subrequests += 7;
               } else if (status === "UPDATING_LISTS") {
-                if (!cachedDomains) {
-                  const fullListStr = await env.ADBLOCK_KV.get("FULL_LIST");
-                  if (fullListStr) cachedDomains = fullListStr.split("\n");
-                }
-                await handleUpdatingLists(env, cachedDomains, existingMap);
-                const metaStr = await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META);
-                if (metaStr) {
-                  const m = JSON.parse(metaStr);
-                  await write(
-                    `📊 Progress: <b>${m.current}/${m.total}</b> updated.`,
-                    "meta",
-                  );
-                  await writer.write(
-                    encoder.encode(
-                      `<script>updateProgress(${m.current}, ${m.total})</script>`,
-                    ),
-                  );
-                }
-                subrequestCount += 8;
+                await handleUpdatingLists(env, undefined, existingMap);
+                const m = JSON.parse(
+                  (await env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META)) || "{}",
+                );
+                await write(
+                  `📊 Progress: <b>${m.current}/${m.total}</b>`,
+                  "meta",
+                );
+                await writer.write(
+                  encoder.encode(
+                    `<script>updateProgress(${m.current}, ${m.total})</script>`,
+                  ),
+                );
+                subrequests += 8;
               } else if (status === "UPDATING_POLICY") {
                 await handleUpdatingPolicy(env);
-                subrequestCount += 5;
+                subrequests += 5;
               } else if (status === "CLEANING_UP") {
                 await handleCleanup(env);
                 await write("✨ Cycle Complete!", "success");
@@ -703,11 +430,10 @@ export default {
               }
               await new Promise((r) => setTimeout(r, 100));
             }
-
-            if (subrequestCount >= SUBREQUEST_LIMIT) {
+            if (subrequests >= 40) {
               const reloadUrl = new URL(request.url);
               reloadUrl.searchParams.delete("force");
-              await write("<hr>⚠️ Limit reached. Auto-reloading...", "warn");
+              await write("<hr>⚠️ Limit reached. Reloading...", "warn");
               await writer.write(
                 encoder.encode(
                   `<script>setTimeout(() => { window.location.href = "${reloadUrl.toString()}"; }, 2000);</script>`,
@@ -731,6 +457,32 @@ export default {
       });
     }
 
+    // --- Status JSON ---
+    if (request.method === "GET" && path === "/status.json") {
+      const [status, meta, lists, metadata, lastRun] = await Promise.all([
+        env.ADBLOCK_KV.get(KV_KEY_STATUS),
+        env.ADBLOCK_KV.get(KV_KEY_CHUNKS_META),
+        env.ADBLOCK_KV.get(KV_KEY_LIST_IDS),
+        env.ADBLOCK_KV.get(KV_KEY_METADATA),
+        env.ADBLOCK_KV.get(KV_KEY_LAST_RUN),
+      ]);
+      return new Response(
+        JSON.stringify(
+          {
+            status: status || "IDLE",
+            meta: meta ? JSON.parse(meta) : null,
+            lists_count: lists ? JSON.parse(lists).length : 0,
+            last_run: lastRun,
+            sources: metadata ? JSON.parse(metadata) : {},
+          },
+          null,
+          2,
+        ),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    // --- Manual Run ---
     if (request.method === "GET" && path === "/run") {
       const status = (await env.ADBLOCK_KV.get(KV_KEY_STATUS)) || "IDLE";
       if (status === "IDLE") {
@@ -754,15 +506,18 @@ export default {
       return Response.redirect(url.origin + "/", 302);
     }
 
+    // --- Reset ---
     if (request.method === "GET" && path === "/reset") {
       await env.ADBLOCK_KV.put(KV_KEY_STATUS, "IDLE");
-      await Promise.all([
-        env.ADBLOCK_KV.delete(KV_KEY_CHUNKS_META),
-        env.ADBLOCK_KV.delete(KV_KEY_LIST_IDS),
-        env.ADBLOCK_KV.delete(KV_KEY_LAST_RUN),
-        env.ADBLOCK_KV.delete(KV_KEY_METADATA),
-        env.ADBLOCK_KV.delete(KV_KEY_HEARTBEAT),
-      ]);
+      await Promise.all(
+        [
+          KV_KEY_CHUNKS_META,
+          KV_KEY_LIST_IDS,
+          KV_KEY_LAST_RUN,
+          KV_KEY_METADATA,
+          KV_KEY_HEARTBEAT,
+        ].map((k) => env.ADBLOCK_KV.delete(k)),
+      );
       return Response.redirect(url.origin + "/", 302);
     }
 
