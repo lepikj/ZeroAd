@@ -270,8 +270,8 @@ export async function deleteGatewayList(
   });
 
   if (!response.ok) {
-    console.error(`Failed to delete list ${listId}: ${response.statusText}`);
-    void response.body?.cancel();
+    const errBody = await response.text();
+    console.error(`Failed to delete list ${listId}: ${response.statusText} - ${errBody}`);
     return false;
   }
 

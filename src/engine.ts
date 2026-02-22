@@ -288,6 +288,9 @@ export class SyncEngine {
     if (onProgress) await onProgress(startMsg, "info");
     console.log(startMsg);
 
+    // Give Cloudflare a moment to propagate the policy update and release the lists
+    await new Promise((r) => setTimeout(r, 2000));
+
     const metaStr = await this.env.ADBLOCK_KV.get(KV_KEYS.CHUNKS_META);
     let deletedCount = 0;
     if (metaStr) {
