@@ -15,12 +15,18 @@ export async function fetchAdBlockList(
 ): Promise<FetchResult> {
   const newMetadata: Record<string, string> = {};
   let anyChanged = false;
+  const UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
   // Step 1: Check Headers (ETag/Last-Modified) using HEAD requests
   console.log("Checking source headers for changes...");
   for (const url of urls) {
     try {
-      const response = await fetch(url, { method: "HEAD" });
+      const response = await fetch(url, {
+        method: "HEAD",
+        headers: { "User-Agent": UA },
+      });
+
       const etag =
         response.headers.get("etag") ||
         response.headers.get("last-modified") ||
@@ -46,22 +52,25 @@ export async function fetchAdBlockList(
   const allowed = new Set<string>();
 
   for (const url of urls) {
-    if (onProgress) await onProgress(`📡 Fetching: ${url.split("/").pop()}`, "meta");
+    if (onProgress)
+      await onProgress(`📡 Fetching: ${url.split("/").pop()}`, "meta");
+
     try {
       const response = await fetch(url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (compatible; ZeroAd/1.0; +https://github.com/lepikj/ZeroAd)",
-        },
+        headers: { "User-Agent": UA },
       });
-      
+
       if (!response.ok) {
-        const errorMsg = `❌ Failed to fetch ${url}: ${response.statusText}`;
+        const errorMsg = `❌ Failed to fetch ${url}: ${response.status} ${response.statusText || "(No status text)"}`;
         if (onProgress) await onProgress(errorMsg, "error");
         console.error(errorMsg);
         continue;
       }
 
-      if (!response.body) continue;
+      if (!response.body) {
+        console.error(`Response body empty for ${url}`);
+        continue;
+      }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -100,24 +109,36 @@ export async function fetchAdBlockList(
 
 /**
  * Processes a single line from a blocklist.
- * Optimized for minimal CPU usage.
+ * Optimized for minimal CPU usage and Cloudflare Gateway compatibility.
  */
 function processLine(line: string, blocked: Set<string>, allowed: Set<string>) {
   const trimmed = line.trim();
-  
-  // Fast skip for comments and empty lines
-  if (!trimmed || trimmed[0] === "!" || trimmed[0] === "#" || trimmed[0] === "[" || (trimmed[0] === "!" && trimmed[1] === "#")) {
+
+  // Fast skip for comments, metadata, and empty lines
+  if (
+    !trimmed ||
+    trimmed[0] === "!" ||
+    trimmed[0] === "#" ||
+    trimmed[0] === "[" ||
+    trimmed.startsWith("!#")
+  ) {
     return;
   }
 
-  // Skip cosmetic filters and complex uBO syntax (most common heavy patterns)
-  if (trimmed.includes("##") || trimmed.includes("#@#") || trimmed.includes("#$#") || trimmed.includes("#?#")) {
+  // Skip cosmetic filters and complex uBO syntax (not supported by DNS Gateway)
+  if (
+    trimmed.includes("##") ||
+    trimmed.includes("#@#") ||
+    trimmed.includes("#$#") ||
+    trimmed.includes("#?#")
+  ) {
     return;
   }
 
   let domain = "";
   let isAllowed = false;
 
+  // Handle various formats: @@||domain^ (allow), ||domain^ (block), 0.0.0.0 domain (block), domain (block)
   if (trimmed.startsWith("@@||")) {
     isAllowed = true;
     domain = trimmed.substring(4);
@@ -127,38 +148,41 @@ function processLine(line: string, blocked: Set<string>, allowed: Set<string>) {
     domain = trimmed.substring(8).trim();
   } else if (trimmed.startsWith("127.0.0.1 ")) {
     domain = trimmed.substring(10).trim();
-  } else if (/^[a-zA-Z0-9]/.test(trimmed) && !trimmed.includes("/") && !trimmed.includes(" ")) {
+  } else if (
+    /^[a-zA-Z0-9]/.test(trimmed) &&
+    !trimmed.includes("/") &&
+    !trimmed.includes(" ")
+  ) {
     domain = trimmed;
   }
 
   if (domain) {
-    // Clean up domain: remove options like $third-party
+    // Strip options (e.g. $third-party)
     const optionsIndex = domain.indexOf("$");
     if (optionsIndex !== -1) domain = domain.substring(0, optionsIndex);
 
-    // Remove trailing syntax like ^
+    // Strip trailing syntax (e.g. ^)
     if (domain.endsWith("^")) domain = domain.substring(0, domain.length - 1);
 
-    // Remove trailing dots
+    // Remove trailing dots (Cloudflare Gateway rejects them)
     while (domain.endsWith(".")) {
       domain = domain.substring(0, domain.length - 1);
     }
 
     domain = domain.toLowerCase().trim();
 
-    // Final validation
+    // Validation
     if (!domain || domain.includes("/") || domain.includes("*")) return;
 
-    // 1. MUST NOT be an IP address (Cloudflare DOMAIN lists reject them)
-    // We skip anything that is a valid IPv4
-    const isValidIPv4 = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(domain);
-    if (isValidIPv4) return;
+    // Reject IP addresses (Cloudflare wants them in IP lists, not DOMAIN lists)
+    const isAllNumAndDots = /^[0-9.]+$/.test(domain);
+    if (isAllNumAndDots) {
+      const isValidIPv4 = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(domain);
+      // If it looks like an IP (4 octets or numeric-only), skip it
+      if (isValidIPv4 || domain.split(".").length >= 2) return;
+    }
 
-    // 2. MUST NOT be a partial IP or numeric-only domain
-    // (Cloudflare rejects domains that are just numbers and dots)
-    if (/^[0-9.]+$/.test(domain)) return;
-
-    // 3. Basic domain structure: no empty labels, no labels > 63 chars
+    // Label validation (RFC 1035)
     const labels = domain.split(".");
     for (const l of labels) {
       if (
