@@ -38,6 +38,7 @@ export function renderDashboard(data: {
   progress?: { current: number; total: number };
   sourceStatuses: any[];
   metadata: any;
+  schedules: string[];
 }) {
   return `
     <!DOCTYPE html>
@@ -68,6 +69,7 @@ export function renderDashboard(data: {
       
       <div class="card">
         <div class="stat"><span class="label">Work Status:</span> <span class="status-value">${data.status}</span></div>
+        <div class="stat"><span class="label">Automation:</span> <span class="value">${data.schedules.length > 0 ? `ACTIVE (${data.schedules.join(", ")})` : "DISABLED"}</span></div>
         <div class="stat"><span class="label">Last Sync:</span> <span class="value">${data.lastRun}</span></div>
         <div class="stat"><span class="label">Active Lists:</span> <span class="value">${data.listsCount} chunks registered</span></div>
         ${data.progress ? `<div class="stat"><span class="label">Progress:</span> <span class="value">${data.progress.current} / ${data.progress.total} chunks</span></div>` : ""}

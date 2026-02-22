@@ -321,6 +321,7 @@ export default {
           progress: metaStr ? JSON.parse(metaStr) : undefined,
           sourceStatuses,
           metadata,
+          schedules,
         }),
         { headers: { "Content-Type": "text/html; charset=utf-8" } },
       );
