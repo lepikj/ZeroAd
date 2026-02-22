@@ -2,13 +2,7 @@
  * ZeroAd: Sync Engine (Core Logic & State Machine)
  */
 
-import {
-  Bindings,
-  SyncStatus,
-  KV_KEYS,
-  CONFIG,
-  ChunksMeta,
-} from "./types";
+import { Bindings, SyncStatus, KV_KEYS, CONFIG, ChunksMeta } from "./types";
 import {
   getGatewayLists,
   createOrUpdateGatewayList,
@@ -17,7 +11,11 @@ import {
 } from "./api";
 import { fetchAdBlockList } from "./parser";
 
-export type ProgressCallback = (msg: string, type?: string, meta?: any) => Promise<void>;
+export type ProgressCallback = (
+  msg: string,
+  type?: string,
+  meta?: any,
+) => Promise<void>;
 
 export class SyncEngine {
   constructor(private env: Bindings) {}
@@ -49,21 +47,25 @@ export class SyncEngine {
    * Orchestrates the next step in the sync cycle.
    */
   async processNextStep(
-    force: boolean = false, 
+    force: boolean = false,
     onProgress?: ProgressCallback,
     cachedDomains?: string[],
-    existingListsMap?: Record<string, string>
+    existingListsMap?: Record<string, string>,
   ): Promise<SyncStatus> {
-    const status = (await this.env.ADBLOCK_KV.get(KV_KEYS.STATUS)) as SyncStatus || "IDLE";
-    
+    const status =
+      ((await this.env.ADBLOCK_KV.get(KV_KEYS.STATUS)) as SyncStatus) || "IDLE";
+
     // Log start of step if callback provided
     if (onProgress) {
-      await onProgress(`📍 Current Phase: <span class="status">${status}</span>`);
+      await onProgress(
+        `📍 Current Phase: <span class="status">${status}</span>`,
+      );
     }
 
     switch (status) {
       case "IDLE":
-        if (onProgress) await onProgress(`🆕 IDLE -> Starting new cycle.`, "info");
+        if (onProgress)
+          await onProgress(`🆕 IDLE -> Starting new cycle.`, "info");
         await this.env.ADBLOCK_KV.put(KV_KEYS.STATUS, "DOWNLOADING");
         await this.handleDownloading(force, onProgress);
         break;
@@ -73,8 +75,12 @@ export class SyncEngine {
       case "UPDATING_LISTS":
         let map = existingListsMap;
         if (!map) {
-          if (onProgress) await onProgress(`📡 Pre-fetching Gateway lists...`, "meta");
-          const lists = await getGatewayLists(this.env.CLOUDFLARE_ACCOUNT_ID, this.env.CLOUDFLARE_API_TOKEN);
+          if (onProgress)
+            await onProgress(`📡 Pre-fetching Gateway lists...`, "meta");
+          const lists = await getGatewayLists(
+            this.env.CLOUDFLARE_ACCOUNT_ID,
+            this.env.CLOUDFLARE_API_TOKEN,
+          );
           map = {};
           lists.forEach((l: any) => (map![l.name] = l.id));
         }
@@ -88,7 +94,9 @@ export class SyncEngine {
         break;
     }
 
-    return (await this.env.ADBLOCK_KV.get(KV_KEYS.STATUS)) as SyncStatus || "IDLE";
+    return (
+      ((await this.env.ADBLOCK_KV.get(KV_KEYS.STATUS)) as SyncStatus) || "IDLE"
+    );
   }
 
   /**
@@ -121,6 +129,15 @@ export class SyncEngine {
         forceUpdate ? {} : currentMetadata,
         onProgress,
       );
+
+      if (result.errors) {
+        const failMsg = `⚠️ Some lists failed to fetch. Aborting update to prevent partial list deletion.`;
+        if (onProgress) await onProgress(failMsg, "warn");
+        console.warn(failMsg);
+        await this.env.ADBLOCK_KV.put(KV_KEYS.STATUS, "IDLE");
+        await this.clearHeartbeat();
+        return;
+      }
 
       if (!result.updated) {
         const skipMsg = `✅ No changes detected. Skipping cycle.`;
@@ -224,7 +241,10 @@ export class SyncEngine {
         if (id && !listIds.includes(id)) listIds.push(id);
       } catch (e: any) {
         if (onProgress)
-          await onProgress(`⚠️ Failed to update ${listName}: ${e.message}`, "warn");
+          await onProgress(
+            `⚠️ Failed to update ${listName}: ${e.message}`,
+            "warn",
+          );
         console.error(`Failed to update list ${listName}: ${e.message}`);
       }
 
@@ -314,7 +334,7 @@ export class SyncEngine {
         const delMsg = `🗑️ Deleting legacy list: ${list.name} (${i + 1}/${toDelete.length})`;
         if (onProgress) await onProgress(delMsg, "meta");
         console.log(delMsg);
-        
+
         await deleteGatewayList(
           this.env.CLOUDFLARE_ACCOUNT_ID,
           this.env.CLOUDFLARE_API_TOKEN,

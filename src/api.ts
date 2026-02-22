@@ -9,6 +9,7 @@ export interface FetchResult {
   blocked?: Set<string>;
   allowed?: Set<string>;
   metadata?: Record<string, string>;
+  errors?: boolean;
 }
 
 /**
@@ -271,7 +272,9 @@ export async function deleteGatewayList(
 
   if (!response.ok) {
     const errBody = await response.text();
-    console.error(`Failed to delete list ${listId}: ${response.statusText} - ${errBody}`);
+    console.error(
+      `Failed to delete list ${listId}: ${response.statusText} - ${errBody}`,
+    );
     return false;
   }
 

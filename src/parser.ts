@@ -15,6 +15,7 @@ export async function fetchAdBlockList(
 ): Promise<FetchResult> {
   const newMetadata: Record<string, string> = {};
   let anyChanged = false;
+  let hasErrors = false;
   const UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
@@ -26,6 +27,11 @@ export async function fetchAdBlockList(
         method: "HEAD",
         headers: { "User-Agent": UA },
       });
+
+      if (!response.ok) {
+        console.warn(`HEAD request failed for ${url}: ${response.status}`);
+        hasErrors = true;
+      }
 
       const etag =
         response.headers.get("etag") ||
@@ -39,12 +45,13 @@ export async function fetchAdBlockList(
     } catch (e) {
       console.warn(`Failed to fetch headers for ${url}, forcing update.`);
       anyChanged = true;
+      hasErrors = true;
     }
   }
 
   // If nothing changed and the URL list is the same length, we can skip
   if (!anyChanged && Object.keys(currentMetadata).length === urls.length) {
-    return { updated: false };
+    return { updated: false, errors: hasErrors };
   }
 
   // Step 2: Something changed, fetch and parse everything
@@ -64,11 +71,12 @@ export async function fetchAdBlockList(
         const errorMsg = `❌ Failed to fetch ${url}: ${response.status} ${response.statusText || "(No status text)"}`;
         if (onProgress) await onProgress(errorMsg, "error");
         console.error(errorMsg);
+        hasErrors = true;
         continue;
       }
 
       if (!response.body) {
-        console.error(`Response body empty for ${url}`);
+        hasErrors = true;
         continue;
       }
 
@@ -96,6 +104,7 @@ export async function fetchAdBlockList(
       const errorMsg = `❌ Error processing ${url}: ${e.message}`;
       if (onProgress) await onProgress(errorMsg, "error");
       console.error(errorMsg);
+      hasErrors = true;
     }
   }
 
@@ -104,6 +113,7 @@ export async function fetchAdBlockList(
     blocked,
     allowed,
     metadata: newMetadata,
+    errors: hasErrors,
   };
 }
 
