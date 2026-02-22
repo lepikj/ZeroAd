@@ -491,6 +491,10 @@ export default {
         ctx.waitUntil(
           handleDownloading(env, url.searchParams.get("force") === "true"),
         );
+      } else if (status === "DOWNLOADING") {
+        ctx.waitUntil(
+          handleDownloading(env, url.searchParams.get("force") === "true"),
+        );
       } else if (status === "UPDATING_LISTS") {
         const lists = await getGatewayLists(
           env.CLOUDFLARE_ACCOUNT_ID,

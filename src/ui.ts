@@ -89,7 +89,9 @@ export function renderDashboard(data: {
                     : s.hasUpdate
                       ? `<span class="badge badge-update">UPDATE AVAILABLE</span>`
                       : `<span class="badge badge-ok">CURRENT</span>`;
-                const headerStyle = s.hasUpdate ? `color: ${COLORS.danger}; font-weight: bold;` : "";
+                const headerStyle = s.hasUpdate
+                  ? `color: ${COLORS.danger}; font-weight: bold;`
+                  : "";
                 return `<tr>
                   <td><div style="font-weight: bold; color: ${COLORS.primary};">${s.name}</div></td>
                   <td>${badge}</td>
@@ -109,7 +111,7 @@ export function renderDashboard(data: {
         </div>
         <a href="/stream" id="btn-stream" class="btn btn-primary">🚀 Run Full Sync Dashboard</a>
         <a href="/run" id="btn-run" class="btn btn-secondary">⏯️ Run Next Batch</a>
-        <a href="/reset" class="btn btn-danger" onclick="return confirm('Wipe all progress?')">⚠️ Reset State</a>
+        <a href="/reset" class="btn btn-danger" onclick="return confirm('⚠️ DANGER: This will wipe all sync progress and metadata from the worker. It will NOT delete lists from Cloudflare. Continue?')">⚠️ Reset State</a>
       </div>
 
       <script>
@@ -121,11 +123,13 @@ export function renderDashboard(data: {
           streamBtn.href = isForce ? '/stream?force=true' : '/stream';
           runBtn.href = isForce ? '/run?force=true' : '/run';
           if (isForce) {
-            streamBtn.innerHTML = '🔥 Run Full Sync (Forced)';
+            streamBtn.innerHTML = '🔥 FORCE Full Sync Rebuild';
             streamBtn.style.background = '${COLORS.warn}';
+            runBtn.innerHTML = '🔥 FORCE Next Batch';
           } else {
             streamBtn.innerHTML = '🚀 Run Full Sync Dashboard';
             streamBtn.style.background = '${COLORS.primary}';
+            runBtn.innerHTML = '⏯️ Run Next Batch';
           }
         });
       </script>
