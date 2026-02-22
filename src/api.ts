@@ -2,16 +2,7 @@
  * ZeroAd: Cloudflare API Interaction Helpers
  */
 
-export interface Bindings {
-  ADBLOCK_KV: KVNamespace;
-  CLOUDFLARE_API_TOKEN: string;
-  CLOUDFLARE_ACCOUNT_ID: string;
-  ADBLOCK_LIST_URLS: string;
-  MAX_ITEMS_PER_LIST: string;
-  LIST_PREFIX: string;
-  MAX_LISTS: string;
-  SCRIPT_NAME: string;
-}
+import { Bindings } from "./types";
 
 export interface FetchResult {
   updated: boolean;
