@@ -13,7 +13,12 @@ export interface Bindings {
   SCRIPT_NAME: string;
 }
 
-export type SyncStatus = "IDLE" | "DOWNLOADING" | "UPDATING_LISTS" | "UPDATING_POLICY" | "CLEANING_UP";
+export type SyncStatus =
+  | "IDLE"
+  | "DOWNLOADING"
+  | "UPDATING_LISTS"
+  | "UPDATING_POLICY"
+  | "CLEANING_UP";
 
 export interface ChunksMeta {
   total: number;

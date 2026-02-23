@@ -27,7 +27,8 @@ app.get("/", async (c) => {
     ]);
 
   const rawUrls =
-    (await c.env.ADBLOCK_KV.get(KV_KEYS.CUSTOM_URLS)) || c.env.ADBLOCK_LIST_URLS;
+    (await c.env.ADBLOCK_KV.get(KV_KEYS.CUSTOM_URLS)) ||
+    c.env.ADBLOCK_LIST_URLS;
   const urls = rawUrls
     .split(",")
     .map((u) => u.trim())
@@ -122,7 +123,9 @@ app.get("/stream", async (c) => {
   const write = async (msg: string, className: string = "") => {
     await writer.write(
       encoder.encode(
-        (className ? `<div class="${className}">${msg}</div>` : `<div>${msg}</div>`) + "\n",
+        (className
+          ? `<div class="${className}">${msg}</div>`
+          : `<div>${msg}</div>`) + "\n",
       ),
     );
   };
@@ -134,7 +137,10 @@ app.get("/stream", async (c) => {
         await write(`🚀 Starting stream processing...`, "info");
 
         // Optimization: Prefetch Gateway lists once
-        const lists = await getGatewayLists(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
+        const lists = await getGatewayLists(
+          c.env.CLOUDFLARE_ACCOUNT_ID,
+          c.env.CLOUDFLARE_API_TOKEN,
+        );
         const existingMap: Record<string, string> = {};
         lists.forEach((l: any) => (existingMap[l.name] = l.id));
 
@@ -145,16 +151,27 @@ app.get("/stream", async (c) => {
         const onProgress = async (msg: string, type?: string, meta?: any) => {
           await write(msg, type);
           if (meta && meta.current !== undefined) {
-            await writer.write(encoder.encode(`<script>updateProgress(${meta.current}, ${meta.total})</script>`));
+            await writer.write(
+              encoder.encode(
+                `<script>updateProgress(${meta.current}, ${meta.total})</script>`,
+              ),
+            );
           }
         };
 
         while (subrequests < 40) {
-          const statusBefore = (await c.env.ADBLOCK_KV.get(KV_KEYS.STATUS)) as SyncStatus || "IDLE";
-          
+          const statusBefore =
+            ((await c.env.ADBLOCK_KV.get(KV_KEYS.STATUS)) as SyncStatus) ||
+            "IDLE";
+
           // Call unified orchestration
-          const statusAfter = await engine.processNextStep(force, onProgress, cachedDomains, existingMap);
-          
+          const statusAfter = await engine.processNextStep(
+            force,
+            onProgress,
+            cachedDomains,
+            existingMap,
+          );
+
           subrequests += 8; // Conservative estimate per step
 
           if (statusAfter === "IDLE") {
@@ -178,7 +195,11 @@ app.get("/stream", async (c) => {
           const reloadUrl = new URL(c.req.url);
           reloadUrl.searchParams.delete("force");
           await write("<hr>⚠️ Limit reached. Auto-reloading...", "warn");
-          await writer.write(encoder.encode(`<script>setTimeout(() => { window.location.href = "${reloadUrl.toString()}"; }, 2000);</script>`));
+          await writer.write(
+            encoder.encode(
+              `<script>setTimeout(() => { window.location.href = "${reloadUrl.toString()}"; }, 2000);</script>`,
+            ),
+          );
         }
         await writer.write(encoder.encode("</body></html>"));
       } catch (e: any) {
