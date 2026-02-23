@@ -12,19 +12,28 @@ const app = new Hono<{ Bindings: Bindings }>();
 
 // --- Dashboard ---
 app.get("/", async (c) => {
-  const [status, metaStr, listsStr, metadataStr, lastRun, schedules] =
-    await Promise.all([
-      c.env.ADBLOCK_KV.get(KV_KEYS.STATUS),
-      c.env.ADBLOCK_KV.get(KV_KEYS.CHUNKS_META),
-      c.env.ADBLOCK_KV.get(KV_KEYS.LIST_IDS),
-      c.env.ADBLOCK_KV.get(KV_KEYS.METADATA),
-      c.env.ADBLOCK_KV.get(KV_KEYS.LAST_RUN),
-      getSchedules(
-        c.env.CLOUDFLARE_ACCOUNT_ID,
-        c.env.SCRIPT_NAME,
-        c.env.CLOUDFLARE_API_TOKEN,
-      ),
-    ]);
+  const engine = new SyncEngine(c.env);
+  const [
+    status,
+    metaStr,
+    listsStr,
+    metadataStr,
+    lastRun,
+    schedules,
+    syncIntervalMs,
+  ] = await Promise.all([
+    c.env.ADBLOCK_KV.get(KV_KEYS.STATUS),
+    c.env.ADBLOCK_KV.get(KV_KEYS.CHUNKS_META),
+    c.env.ADBLOCK_KV.get(KV_KEYS.LIST_IDS),
+    c.env.ADBLOCK_KV.get(KV_KEYS.METADATA),
+    c.env.ADBLOCK_KV.get(KV_KEYS.LAST_RUN),
+    getSchedules(
+      c.env.CLOUDFLARE_ACCOUNT_ID,
+      c.env.SCRIPT_NAME,
+      c.env.CLOUDFLARE_API_TOKEN,
+    ),
+    engine.getSyncInterval(),
+  ]);
 
   const rawUrls =
     (await c.env.ADBLOCK_KV.get(KV_KEYS.CUSTOM_URLS)) ||
@@ -71,19 +80,22 @@ app.get("/", async (c) => {
       sourceStatuses,
       metadata,
       schedules,
+      syncInterval: (syncIntervalMs / (60 * 60 * 1000)).toString(),
     }),
   );
 });
 
 // --- Settings ---
 app.get("/settings", async (c) => {
-  const [customUrls, schedules] = await Promise.all([
+  const engine = new SyncEngine(c.env);
+  const [customUrls, schedules, syncIntervalMs] = await Promise.all([
     c.env.ADBLOCK_KV.get(KV_KEYS.CUSTOM_URLS),
     getSchedules(
       c.env.CLOUDFLARE_ACCOUNT_ID,
       c.env.SCRIPT_NAME,
       c.env.CLOUDFLARE_API_TOKEN,
     ),
+    engine.getSyncInterval(),
   ]);
 
   return c.html(
@@ -91,6 +103,7 @@ app.get("/settings", async (c) => {
       customUrls,
       defaultUrls: c.env.ADBLOCK_LIST_URLS,
       currentCron: schedules[0] || "",
+      syncInterval: (syncIntervalMs / (60 * 60 * 1000)).toString(),
     }),
   );
 });
@@ -99,16 +112,24 @@ app.post("/settings", async (c) => {
   const body = await c.req.parseBody();
   const urls = body["urls"]?.toString().trim();
   const cron = body["cron"]?.toString().trim();
+  const interval = body["interval"]?.toString().trim();
 
+  // Save URLs to KV
   if (urls) await c.env.ADBLOCK_KV.put(KV_KEYS.CUSTOM_URLS, urls);
   else await c.env.ADBLOCK_KV.delete(KV_KEYS.CUSTOM_URLS);
 
+  // Save Interval to KV
+  if (interval) await c.env.ADBLOCK_KV.put(KV_KEYS.SYNC_INTERVAL, interval);
+  else await c.env.ADBLOCK_KV.delete(KV_KEYS.SYNC_INTERVAL);
+
+  // Update Cron Schedule via API
   await updateSchedules(
     c.env.CLOUDFLARE_ACCOUNT_ID,
     c.env.SCRIPT_NAME,
     c.env.CLOUDFLARE_API_TOKEN,
     cron ? [cron] : [],
   );
+
   return c.redirect("/", 302);
 });
 

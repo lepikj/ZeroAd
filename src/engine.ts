@@ -62,41 +62,66 @@ export class SyncEngine {
       );
     }
 
-    switch (status) {
-      case "IDLE":
-        if (onProgress)
-          await onProgress(`🆕 IDLE -> Starting new cycle.`, "info");
-        await this.env.ADBLOCK_KV.put(KV_KEYS.STATUS, "DOWNLOADING");
-        await this.handleDownloading(force, onProgress);
-        break;
-      case "DOWNLOADING":
-        await this.handleDownloading(force, onProgress);
-        break;
-      case "UPDATING_LISTS":
-        let map = existingListsMap;
-        if (!map) {
-          if (onProgress)
-            await onProgress(`📡 Pre-fetching Gateway lists...`, "meta");
-          const lists = await getGatewayLists(
-            this.env.CLOUDFLARE_ACCOUNT_ID,
-            this.env.CLOUDFLARE_API_TOKEN,
-          );
-          map = {};
-          lists.forEach((l: any) => (map![l.name] = l.id));
-        }
-        await this.handleUpdatingLists(onProgress, cachedDomains, map);
-        break;
-      case "UPDATING_POLICY":
-        await this.handleUpdatingPolicy(onProgress);
-        break;
-      case "CLEANING_UP":
-        await this.handleCleanup(onProgress);
-        break;
+    if (status === "IDLE") {
+      const lastRun = await this.env.ADBLOCK_KV.get(KV_KEYS.LAST_RUN);
+      const intervalMs = await this.getSyncInterval();
+      const now = Date.now();
+
+      if (!force && lastRun && now - parseInt(lastRun) < intervalMs) {
+        const remaining = Math.round(
+          (intervalMs - (now - parseInt(lastRun))) / (60 * 60 * 1000),
+        );
+        console.log(`Sync not needed yet. Next run in ~${remaining} hours.`);
+        return "IDLE";
+      }
+
+      if (onProgress)
+        await onProgress(`🆕 IDLE -> Starting new cycle.`, "info");
+      await this.env.ADBLOCK_KV.put(KV_KEYS.STATUS, "DOWNLOADING");
+      await this.handleDownloading(force, onProgress);
+    } else {
+      switch (status) {
+        case "DOWNLOADING":
+          await this.handleDownloading(force, onProgress);
+          break;
+        case "UPDATING_LISTS":
+          let map = existingListsMap;
+          if (!map) {
+            if (onProgress)
+              await onProgress(`📡 Pre-fetching Gateway lists...`, "meta");
+            const lists = await getGatewayLists(
+              this.env.CLOUDFLARE_ACCOUNT_ID,
+              this.env.CLOUDFLARE_API_TOKEN,
+            );
+            map = {};
+            lists.forEach((l: any) => (map![l.name] = l.id));
+          }
+          await this.handleUpdatingLists(onProgress, cachedDomains, map);
+          break;
+        case "UPDATING_POLICY":
+          await this.handleUpdatingPolicy(onProgress);
+          break;
+        case "CLEANING_UP":
+          await this.handleCleanup(onProgress);
+          break;
+      }
     }
 
     return (
       ((await this.env.ADBLOCK_KV.get(KV_KEYS.STATUS)) as SyncStatus) || "IDLE"
     );
+  }
+
+  /**
+   * Returns the configured sync interval in milliseconds.
+   */
+  async getSyncInterval(): Promise<number> {
+    const custom = await this.env.ADBLOCK_KV.get(KV_KEYS.SYNC_INTERVAL);
+    if (custom) {
+      const hours = parseFloat(custom);
+      if (!isNaN(hours) && hours > 0) return hours * 60 * 60 * 1000;
+    }
+    return CONFIG.SYNC_INTERVAL_MS;
   }
 
   /**

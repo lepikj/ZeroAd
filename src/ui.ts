@@ -39,6 +39,7 @@ export function renderDashboard(data: {
   sourceStatuses: any[];
   metadata: any;
   schedules: string[];
+  syncInterval: string;
 }) {
   return `
     <!DOCTYPE html>
@@ -70,6 +71,7 @@ export function renderDashboard(data: {
       <div class="card">
         <div class="stat"><span class="label">Work Status:</span> <span class="status-value">${data.status}</span></div>
         <div class="stat"><span class="label">Automation:</span> <span class="value">${data.schedules.length > 0 ? `ACTIVE (${data.schedules.join(", ")})` : "DISABLED"}</span></div>
+        <div class="stat"><span class="label">Interval:</span> <span class="value">Every ${data.syncInterval} hours</span></div>
         <div class="stat"><span class="label">Last Sync:</span> <span class="value">${data.lastRun}</span></div>
         <div class="stat"><span class="label">Active Lists:</span> <span class="value">${data.listsCount} chunks registered</span></div>
         ${data.progress ? `<div class="stat"><span class="label">Progress:</span> <span class="value">${data.progress.current} / ${data.progress.total} chunks</span></div>` : ""}
@@ -142,6 +144,7 @@ export function renderSettings(data: {
   customUrls: string | null;
   defaultUrls: string;
   currentCron: string;
+  syncInterval: string;
 }) {
   return `
     <!DOCTYPE html>
@@ -154,7 +157,7 @@ export function renderSettings(data: {
         padding: 32px;
         .form-group { margin-bottom: 16px; }
         label { display: block; color: ${COLORS.meta}; margin-bottom: 6px; font-weight: bold; }
-        textarea, input[type="text"] { width: 100%; background: ${COLORS.bg}; border: 1px solid ${COLORS.border}; color: #fff; padding: 10px; border-radius: 5px; font-family: inherit; box-sizing: border-box; font-size: 13px; }
+        textarea, input[type="text"], input[type="number"] { width: 100%; background: ${COLORS.bg}; border: 1px solid ${COLORS.border}; color: #fff; padding: 10px; border-radius: 5px; font-family: inherit; box-sizing: border-box; font-size: 13px; }
         .back-link { color: ${COLORS.meta}; text-decoration: none; margin-bottom: 16px; display: inline-block; font-size: 13px; }
         .hint { font-size: 11px; color: #666; margin-top: 4px; }
       </style>
@@ -175,6 +178,12 @@ export function renderSettings(data: {
             <label>Cron Schedule</label>
             <input type="text" name="cron" value="${data.currentCron}" placeholder="*/5 * * * *">
             <div class="hint">Standard cron expression (e.g., "0 0 * * *" for daily). Leave empty to disable automation.</div>
+          </div>
+
+          <div class="form-group">
+            <label>Sync Interval (Hours)</label>
+            <input type="number" name="interval" value="${data.syncInterval}" min="1" step="1">
+            <div class="hint">How long to wait between automatic header checks (default is 24).</div>
           </div>
 
           <button type="submit" class="btn btn-primary">💾 Save Configuration</button>

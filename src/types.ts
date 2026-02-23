@@ -48,6 +48,7 @@ export const KV_KEYS = {
   HEARTBEAT: "last_heartbeat",
   CUSTOM_URLS: "config_urls",
   FULL_LIST: "FULL_LIST",
+  SYNC_INTERVAL: "config_sync_interval",
 };
 
 // Logic Constants
