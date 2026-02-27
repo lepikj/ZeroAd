@@ -29,6 +29,9 @@ const SHARED_STYLES = `
   .btn-danger { background: transparent; color: ${COLORS.danger}; border: 1px solid ${COLORS.danger}; }
   .btn:hover { opacity: 0.8; transform: translateY(-1px); }
   .btn-danger:hover { background: ${COLORS.danger}; color: #121212; }
+  .small-text { font-size: 11px; color: ${COLORS.meta}; margin-top: 4px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
 `;
 
 export function renderDashboard(data: {
@@ -40,6 +43,13 @@ export function renderDashboard(data: {
   metadata: any;
   schedules: string[];
   syncInterval: string;
+  systemIntel?: {
+    colo: string;
+    versionId: string;
+    versionTime: string;
+    r2Count: number;
+    workflow: any;
+  }
 }) {
   return `
     <!DOCTYPE html>
@@ -68,13 +78,24 @@ export function renderDashboard(data: {
         <a href="/settings" class="settings-link">⚙️ Settings</a>
       </h1>
       
-      <div class="card">
-        <div class="stat"><span class="label">Work Status:</span> <span class="status-value">${data.status}</span></div>
-        <div class="stat"><span class="label">Automation:</span> <span class="value">${data.schedules.length > 0 ? `ACTIVE (${data.schedules.join(", ")})` : "DISABLED"}</span></div>
-        <div class="stat"><span class="label">Interval:</span> <span class="value">Every ${data.syncInterval} hours</span></div>
-        <div class="stat"><span class="label">Last Sync:</span> <span class="value">${data.lastRun}</span></div>
-        <div class="stat"><span class="label">Active Lists:</span> <span class="value">${data.listsCount} chunks registered</span></div>
-        ${data.progress ? `<div class="stat"><span class="label">Progress:</span> <span class="value">${data.progress.current} / ${data.progress.total} chunks</span></div>` : ""}
+      <div class="grid">
+        <div class="card" style="margin-bottom: 0;">
+          <div class="label" style="margin-bottom: 12px; display: block; font-size: 14px; color: ${COLORS.text};">Sync Configuration</div>
+          <div class="stat"><span class="label">Automation:</span> <span class="value">${data.schedules.length > 0 ? `ACTIVE (${data.schedules.join(", ")})` : "DISABLED"}</span></div>
+          <div class="stat"><span class="label">Interval:</span> <span class="value">Every ${data.syncInterval} hours</span></div>
+          <div class="stat"><span class="label">Last Sync:</span> <span class="value">${data.lastRun}</span></div>
+          <div class="stat"><span class="label">Active Lists:</span> <span class="value">${data.listsCount} chunks</span></div>
+        </div>
+
+        <div class="card" style="margin-bottom: 0;">
+          <div class="label" style="margin-bottom: 12px; display: block; font-size: 14px; color: ${COLORS.text};">Workflow Activity</div>
+          ${data.systemIntel?.workflow ? `
+            <div class="stat"><span class="label">Status:</span> <span class="status-value">${data.systemIntel.workflow.status}</span></div>
+            <div class="stat"><span class="label">Instance:</span> <span class="value" style="font-size: 10px; font-family: monospace;">${data.systemIntel.workflow.id}</span></div>
+            <div class="stat"><span class="label">Last Update:</span> <span class="value">${new Date(data.systemIntel.workflow.updatedAt).toLocaleString()}</span></div>
+            ${data.systemIntel.workflow.error ? `<div class="stat"><span class="label">Error:</span> <span style="color: ${COLORS.danger}; font-size: 11px;">${data.systemIntel.workflow.error.message}</span></div>` : ""}
+          ` : `<div class="stat" style="color: ${COLORS.meta};">No recent workflow activity detected.</div>`}
+        </div>
       </div>
 
       <div class="card">
@@ -103,6 +124,27 @@ export function renderDashboard(data: {
               .join("")}
           </tbody>
         </table>
+      </div>
+
+      <div class="card">
+        <div class="label" style="margin-bottom: 12px; display: block; font-size: 14px; color: ${COLORS.text};">System Environment</div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
+          <div>
+            <div class="label" style="display: block; margin-bottom: 4px;">Deployment Version</div>
+            <div class="value" style="font-size: 10px; font-family: monospace; word-break: break-all;">${data.systemIntel?.versionId || 'N/A'}</div>
+            <div class="small-text">Deployed: ${data.systemIntel?.versionTime ? new Date(data.systemIntel.versionTime).toLocaleString() : 'N/A'}</div>
+          </div>
+          <div>
+            <div class="label" style="display: block; margin-bottom: 4px;">Edge Location</div>
+            <div class="value">${data.systemIntel?.colo || 'N/A'}</div>
+            <div class="small-text">Regional Datacenter</div>
+          </div>
+          <div>
+            <div class="label" style="display: block; margin-bottom: 4px;">Temp Storage</div>
+            <div class="value">${data.systemIntel?.r2Count || 0} Objects</div>
+            <div class="small-text">In zero-ad-sync-assets</div>
+          </div>
+        </div>
       </div>
 
       <div class="actions">
@@ -236,7 +278,7 @@ export function getStreamHeader(force: boolean) {
         #progress-container { position: fixed; top: 0; left: 0; width: 100%; background: #1e1e1e; padding: 12px 16px; border-bottom: 1px solid ${COLORS.border}; z-index: 1000; box-sizing: border-box; }
         progress { width: 100%; height: 10px; appearance: none; border: none; }
         progress::-webkit-progress-bar { background-color: ${COLORS.border}; border-radius: 5px; }
-        progress::-webkit-progress-value { background-color: ${COLORS.primary}; border-radius: 5px; transition: width 0.5s ease; }
+        progress::-webkit-progress-value { background-color: ${COLORS.primary}; border-radius: 5px; transition: width 0.5s ease; transition: width 0.5s ease; }
         .info { color: ${COLORS.success}; }
         .status { color: ${COLORS.primary}; font-weight: bold; }
         .warn { color: ${COLORS.warn}; font-weight: bold; }
