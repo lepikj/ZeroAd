@@ -141,7 +141,7 @@ export class AdBlockSyncWorkflow extends WorkflowEntrypoint<Bindings> {
       await engine.reportWorkflowProgress(runId, "CLEANING_UP");
       
       // Delete obsolete Gateway lists
-      const deletedLists = await engine.performCleanup(mapResult.totalChunks!);
+      const deletedLists = await engine.cleanupObsoleteLists(mapResult.totalChunks!);
       
       // Update persistent state
       await this.env.ADBLOCK_KV.put(KV_KEYS.STATUS, "IDLE");
