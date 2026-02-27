@@ -35,6 +35,32 @@ app.get("/", async (c) => {
     engine.getSyncInterval(),
   ]);
 
+  // Workflow & System Info
+  let workflowInfo = null;
+  try {
+    const list = await (c.env as any).ADBLOCK_SYNC_WORKFLOW.list({ limit: 1 });
+    if (list.instances && list.instances.length > 0) {
+      const latest = list.instances[0];
+      const fullInstance = await (c.env as any).ADBLOCK_SYNC_WORKFLOW.get(latest.id);
+      const statusObj = await fullInstance.status();
+      workflowInfo = {
+        id: latest.id,
+        status: statusObj.status,
+        error: statusObj.error,
+        updatedAt: statusObj.updatedAt
+      };
+    }
+  } catch (e) {}
+
+  let r2Count = 0;
+  try {
+    const objects = await c.env.SYNC_BUCKET.list();
+    r2Count = objects.objects.length;
+  } catch (e) {}
+
+  const colo = (c.req.raw as any).cf?.colo || 'N/A';
+  const version = c.env.CF_VERSION_METADATA || { id: 'dev', timestamp: new Date().toISOString() };
+
   const rawUrls =
     (await c.env.ADBLOCK_KV.get(KV_KEYS.CUSTOM_URLS)) ||
     c.env.ADBLOCK_LIST_URLS;
@@ -81,6 +107,13 @@ app.get("/", async (c) => {
       metadata,
       schedules,
       syncInterval: (syncIntervalMs / (60 * 60 * 1000)).toString(),
+      systemIntel: {
+        colo,
+        versionId: version.id,
+        versionTime: version.timestamp,
+        r2Count,
+        workflow: workflowInfo
+      }
     }),
   );
 });
