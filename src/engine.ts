@@ -159,11 +159,6 @@ export class SyncEngine {
     if (id) {
       // Store the resulting ID in KV for the workflow to aggregate later
       await this.env.ADBLOCK_KV.put(`${KV_KEYS.LIST_IDS}_${msg.runId}_${msg.listName}`, id);
-      
-      // Increment completion counter
-      const counterKey = `sync_count_${msg.runId}`;
-      const current = await this.env.ADBLOCK_KV.get(counterKey);
-      await this.env.ADBLOCK_KV.put(counterKey, (parseInt(current || "0") + 1).toString());
     }
   }
 

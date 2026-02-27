@@ -97,22 +97,21 @@ export class AdBlockSyncWorkflow extends WorkflowEntrypoint<Bindings> {
     // 3. WAIT FOR COMPLETION
     // We poll KV to see if the queue workers have finished their 1000 subrequest-heavy tasks.
     await step.do('wait-for-queue', async () => {
-      const counterKey = `sync_count_${runId}`;
+      const prefix = `${KV_KEYS.LIST_IDS}_${runId}_`;
       let completed = 0;
       const total = mapResult.totalChunks!;
       
-      // Safety: Max 30 polls (approx 30 mins)
-      for (let attempt = 0; attempt < 30; attempt++) {
-        const countStr = await this.env.ADBLOCK_KV.get(counterKey);
-        completed = parseInt(countStr || "0");
+      // Safety: Max 60 polls (approx 60 mins)
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const list = await this.env.ADBLOCK_KV.list({ prefix });
+        completed = list.keys.length;
         
         await engine.reportWorkflowProgress(runId, "PROCESSING_QUEUE", completed, total);
-        console.log(`[workflow] Progress: ${completed}/${total} lists updated`);
+        console.log(`[workflow] Progress: ${completed}/${total} lists updated (Attempt ${attempt + 1})`);
 
         if (completed >= total) break;
         
         // Wait 1 minute before next poll
-        // (Workflows support waiting, but we do it inside step.do loop here for granularity)
         await new Promise(r => setTimeout(r, 60000));
       }
 
