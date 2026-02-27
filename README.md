@@ -6,9 +6,10 @@ ZeroAd is a high-performance, serverless adblocker designed to run natively on *
 
 - **Native Worker Implementation**: No external servers, GitHub Actions, or local scripts required for daily operation.
 - **Dynamic Configuration UI**: Manage source list URLs and Cron schedules directly from the browser (KV & Cloudflare API-backed).
-- **Stateful Processing**: Uses a Cron-driven State Machine (Workers KV) to bypass the 10ms CPU and 50-subrequest limits of the Cloudflare Free Plan.
+- **Stateful Orchestration (Cloudflare Workflows)**: Uses Workflows to handle long-running synchronization tasks. This ensures durability, automatic retries, and bypasses the strict 10ms CPU limits.
+- **R2 Storage Integration**: Leverages R2 for temporary storage of large domain lists during the sync process, ensuring memory efficiency.
 - **Smart Updates (ETag/Last-Modified)**: Uses HTTP header checks to detect source list changes, skipping unnecessary processing and saving API/KV units.
-- **Streaming Interface**: Includes a `/stream` endpoint for real-time progress monitoring and manual synchronization.
+- **Streaming Interface**: Includes a `/stream` endpoint for real-time progress monitoring.
 - **Multiple List Support**: Supports AdGuard and uBlock Origin syntax (`||domain^`, `@@||domain^`, etc.) with full whitelisting and prioritization.
 - **Large Capacity**: Manages up to 90,000 domains (90 Gateway lists of 1,000 items each).
 
@@ -40,23 +41,21 @@ This project was inspired by and built upon the logic and research of the follow
 
 ## How It Works
 
-ZeroAd breaks the synchronization process into five distinct phases across multiple Cron executions:
+ZeroAd uses **Cloudflare Workflows** to manage the complex synchronization process. When a cron trigger or manual action starts a sync, a workflow is spawned:
 
-1.  **IDLE**: Checks if 24 hours have passed or if headers changed.
-2.  **DOWNLOADING**: Fetches and parses configured lists (defaulting to **uBO-et** and **OISD Small**). Applies whitelisting, removes IPs, and deduplicates.
-3.  **UPDATING_LISTS**: Iteratively updates Cloudflare Gateway lists (5 per run).
-4.  **UPDATING_POLICY**: Synchronizes the Gateway DNS policy with the current list IDs.
-5.  **CLEANING_UP**: Automatically deletes any legacy Gateway lists from previous runs that are no longer needed (e.g., if the total domain count decreased).
+1.  **fetch-and-prepare**: Downloads source lists, parses them, and saves the result to R2.
+2.  **update-gateway-lists**: Iteratively updates Cloudflare Gateway lists in the Zero Trust dashboard.
+3.  **apply-policy**: Ensures the DNS firewall policy is using the correct list IDs.
+4.  **cleanup**: Removes obsolete lists and temporary R2 assets.
 
-### Cron Flow & State Machine
+### Cron Flow & Workflows
 
-Since the Cloudflare Workers Free Plan has a **10ms CPU limit** and a **50-subrequest limit** per invocation, ZeroAd uses a **State Machine** backed by **Workers KV** to handle large blocklists:
+By using Workflows, the application gains native durability and avoids the "state machine" complexity previously required to stay within Worker resource limits:
 
--   **Persistence**: The current status, processed domain list, and sync progress are stored in KV.
--   **Batching**: Instead of updating all 90 lists at once (which would exceed the subrequest limit), the worker updates **5 lists per 5-minute cron run**.
+-   **Native Durability**: Workflows automatically handle state persistence and retries if a step fails or is terminated.
+-   **CPU Isolation**: Each step in the workflow has its own CPU budget, preventing the "Exceeded CPU" errors common when processing large datasets in a single Worker invocation.
 -   **Smart Skip (ETags)**: Before starting a sync, the worker performs a lightweight `HEAD` request to check if the source lists have actually changed. If not, it skips the entire cycle, saving KV writes and API units.
--   **Concurrency Protection (Heartbeat)**: To prevent the Cron trigger and a manual Dashboard sync from interfering with each other, the worker maintains a `last_heartbeat` in KV. If an active sync is detected within the last 2 minutes, the cron run is skipped.
--   **Auto-Resumption**: If a worker execution is terminated by the platform, the state remains in KV. The next cron or dashboard load will automatically pick up from the last successful chunk.
+-   **No Concurrency Hacks**: Workflows natively manage instance creation and execution, eliminating the need for manual heartbeat/locking mechanisms.
 
 ## Detailed Setup Guide
 

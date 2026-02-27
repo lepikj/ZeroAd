@@ -247,6 +247,15 @@ app.get("/run", async (c) => {
   return c.redirect("/", 302);
 });
 
+// --- Workflow Manual Run ---
+app.get("/workflow/run", async (c) => {
+  const force = c.req.query("force") === "true";
+  await (c.env as any).ADBLOCK_SYNC_WORKFLOW.create({
+    params: { force }
+  });
+  return c.json({ success: true, message: "Workflow started" });
+});
+
 // --- Reset ---
 app.get("/reset", async (c) => {
   const engine = new SyncEngine(c.env);

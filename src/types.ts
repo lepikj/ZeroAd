@@ -4,6 +4,8 @@
 
 export interface Bindings {
   ADBLOCK_KV: KVNamespace;
+  SYNC_BUCKET: R2Bucket;
+  ADBLOCK_SYNC_WORKFLOW: { create: (options?: any) => Promise<any> };
   CLOUDFLARE_API_TOKEN: string;
   CLOUDFLARE_ACCOUNT_ID: string;
   ADBLOCK_LIST_URLS: string;

@@ -18,26 +18,19 @@
 import { Bindings } from "./types";
 import { SyncEngine } from "./engine";
 import router from "./router";
+import { AdBlockSyncWorkflow } from "./workflows/AdBlockSyncWorkflow";
 
 export default {
   /**
-   * Cron Trigger Handler: Orchestrates the background sync cycle.
+   * Cron Trigger Handler: Spawns the AdBlock Sync Workflow.
    */
   async scheduled(
     event: ScheduledEvent,
     env: Bindings,
     ctx: ExecutionContext,
   ): Promise<void> {
-    const engine = new SyncEngine(env);
-
-    // Concurrency Lock: Ensure only one worker is active at a time
-    if (await engine.isLocked()) {
-      console.log("Another worker is active. Skipping cron run.");
-      return;
-    }
-
-    // Process the next step in the state machine
-    await engine.processNextStep();
+    console.log("Cron: Spawning AdBlock Sync Workflow");
+    await env.ADBLOCK_SYNC_WORKFLOW.create();
   },
 
   /**
@@ -51,3 +44,5 @@ export default {
     return router.fetch(request, env, ctx);
   },
 };
+
+export { AdBlockSyncWorkflow };

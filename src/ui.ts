@@ -112,6 +112,7 @@ export function renderDashboard(data: {
           </label>
         </div>
         <a href="/stream" id="btn-stream" class="btn btn-primary">🚀 Run Full Sync Dashboard</a>
+        <a href="/workflow/run" id="btn-workflow" class="btn btn-secondary" onclick="return triggerWorkflow(event)">🌀 Run Background Workflow</a>
         <a href="/run" id="btn-run" class="btn btn-secondary">⏯️ Run Next Batch</a>
         <a href="/reset" class="btn btn-danger" onclick="return confirm('⚠️ DANGER: This will wipe all sync progress and metadata from the worker. It will NOT delete lists from Cloudflare. Continue?')">⚠️ Reset State</a>
       </div>
@@ -120,10 +121,37 @@ export function renderDashboard(data: {
         const toggle = document.getElementById('force-toggle');
         const streamBtn = document.getElementById('btn-stream');
         const runBtn = document.getElementById('btn-run');
+        const workflowBtn = document.getElementById('btn-workflow');
+
+        async function triggerWorkflow(e) {
+          e.preventDefault();
+          const url = workflowBtn.href;
+          const originalText = workflowBtn.innerText;
+          workflowBtn.style.opacity = '0.5';
+          workflowBtn.innerText = '⏳ Starting...';
+          try {
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.success) {
+              alert('✅ Workflow started successfully! Check Cloudflare Dashboard for progress.');
+            } else {
+              alert('❌ Error: ' + data.error);
+            }
+          } catch (err) {
+            alert('💥 Critical Failure: ' + err.message);
+          } finally {
+            workflowBtn.style.opacity = '1';
+            workflowBtn.innerText = originalText;
+          }
+          return false;
+        }
+
         toggle.addEventListener('change', () => {
           const isForce = toggle.checked;
           streamBtn.href = isForce ? '/stream?force=true' : '/stream';
           runBtn.href = isForce ? '/run?force=true' : '/run';
+          workflowBtn.href = isForce ? '/workflow/run?force=true' : '/workflow/run';
+
           if (isForce) {
             streamBtn.innerHTML = '🔥 FORCE Full Sync Rebuild';
             streamBtn.style.background = '${COLORS.warn}';
