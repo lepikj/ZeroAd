@@ -16,7 +16,8 @@ export class AdBlockSyncWorkflow extends WorkflowEntrypoint<Bindings> {
     const batchTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const runId = event.instanceId || crypto.randomUUID();
     const runPrefix = `sync/runs/${runId}/`;
-    const force = event.payload?.force || false;
+    // Workflows use event.payload for passed data
+    const force = (event as any).payload?.force || false;
     
     const engine = new SyncEngine(this.env);
 

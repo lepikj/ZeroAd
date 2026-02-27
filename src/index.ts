@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { Bindings } from "./types";
+import { Bindings, KV_KEYS } from "./types";
 import { SyncEngine } from "./engine";
 import router from "./router";
 import { AdBlockSyncWorkflow } from "./workflows/AdBlockSyncWorkflow";
@@ -29,6 +29,18 @@ export default {
     env: Bindings,
     ctx: ExecutionContext,
   ): Promise<void> {
+    const engine = new SyncEngine(env);
+    const lastRun = await env.ADBLOCK_KV.get(KV_KEYS.LAST_RUN);
+    const intervalMs = await engine.getSyncInterval();
+    const now = Date.now();
+
+    // Respect the configurable sync interval
+    if (lastRun && now - parseInt(lastRun) < intervalMs) {
+      const remaining = Math.round((intervalMs - (now - parseInt(lastRun))) / (60 * 60 * 1000));
+      console.log(`Sync block active. Next run in ~${remaining} hours. Skipping workflow spawn.`);
+      return;
+    }
+
     console.log("Cron: Spawning AdBlock Sync Workflow");
     await env.ADBLOCK_SYNC_WORKFLOW.create();
   },
