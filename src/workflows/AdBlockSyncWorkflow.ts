@@ -8,21 +8,21 @@ interface SyncEvent {
 }
 
 /**
- * AdBlockSyncWorkflow
- * Orchestrates the adblock list synchronization process using discrete, durable steps.
+ * AdBlockSyncWorkflow (Queue-Powered Edition)
+ * Orchestrates the full adblock list synchronization.
+ * Offloads subrequest-heavy list updates to Cloudflare Queues to stay under Free Plan limits.
  */
 export class AdBlockSyncWorkflow extends WorkflowEntrypoint<Bindings> {
   async run(event: WorkflowEvent<SyncEvent>, step: WorkflowStep) {
-    const batchTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const runId = event.instanceId || crypto.randomUUID();
     const runPrefix = `sync/runs/${runId}/`;
-    // Workflows use event.payload for passed data
     const force = (event as any).payload?.force || false;
     
     const engine = new SyncEngine(this.env);
 
-    // 1. MAP: Download and split into R2 parts
+    // 1. DOWNLOAD & PARTITION
     const mapResult = await step.do('download-and-partition', async () => {
+      await engine.reportWorkflowProgress(runId, "DOWNLOADING");
       console.log(`[workflow] Starting download (force=${force})`);
       const result = await engine.downloadAndDeduplicate(force);
 
@@ -46,7 +46,8 @@ export class AdBlockSyncWorkflow extends WorkflowEntrypoint<Bindings> {
       console.log(`[workflow] Split into ${totalChunks} parts in R2`);
       return { 
         updated: true, 
-        partKeys, 
+        totalChunks, 
+        partKeys,
         metadata: result.metadata, 
         totalDomains: result.total 
       };
@@ -56,67 +57,115 @@ export class AdBlockSyncWorkflow extends WorkflowEntrypoint<Bindings> {
       await step.do('finalize-idle', async () => {
         await this.env.ADBLOCK_KV.put(KV_KEYS.STATUS, "IDLE");
         await this.env.ADBLOCK_KV.put(KV_KEYS.LAST_RUN, Date.now().toString());
+        await engine.reportWorkflowProgress(runId, "IDLE");
       });
       return;
     }
 
-    // 2. REDUCE: Update each Gateway list in its own step
-    const listIds: string[] = [];
-    
-    // Optimization: Fetch existing lists once to map names to IDs
-    const existingMap = await step.do('fetch-existing-lists', async () => {
+    // 2. DISPATCH TO QUEUE
+    await step.do('dispatch-tasks', async () => {
+      await engine.reportWorkflowProgress(runId, "DISPATCHING", 0, mapResult.totalChunks);
+      
+      // Fetch existing mapping once to help the queue workers
       const lists = await getGatewayLists(this.env.CLOUDFLARE_ACCOUNT_ID, this.env.CLOUDFLARE_API_TOKEN);
-      const map: Record<string, string> = {};
-      lists.forEach(l => map[l.name] = l.id);
-      return map;
+      const existingMap: Record<string, string> = {};
+      lists.forEach(l => existingMap[l.name] = l.id);
+
+      const messages = [];
+      for (let i = 0; i < mapResult.totalChunks!; i++) {
+        const listName = `${this.env.LIST_PREFIX}${i + 1}`;
+        messages.push({
+          contentType: 'json',
+          body: {
+            runId,
+            listName,
+            r2Key: mapResult.partKeys![i],
+            existingId: existingMap[listName]
+          }
+        });
+      }
+
+      // Send in batches of 100 (Max allowed by sendBatch)
+      for (let i = 0; i < messages.length; i += 100) {
+        const batch = messages.slice(i, i + 100);
+        await (this.env.SYNC_QUEUE as any).sendBatch(batch);
+      }
+
+      console.log(`[workflow] Dispatched ${messages.length} tasks to SYNC_QUEUE`);
     });
 
-    for (let i = 0; i < mapResult.partKeys!.length; i++) {
-      const partKey = mapResult.partKeys![i];
-      const listName = `${this.env.LIST_PREFIX}${i + 1}`;
+    // 3. WAIT FOR COMPLETION
+    // We poll KV to see if the queue workers have finished their 1000 subrequest-heavy tasks.
+    await step.do('wait-for-queue', async () => {
+      const counterKey = `sync_count_${runId}`;
+      let completed = 0;
+      const total = mapResult.totalChunks!;
       
-      const listId = await step.do(`update-list-${i + 1}`, async () => {
-        const obj = await this.env.SYNC_BUCKET.get(partKey);
-        if (!obj) throw new Error(`Part missing from R2: ${partKey}`);
+      // Safety: Max 30 polls (approx 30 mins)
+      for (let attempt = 0; attempt < 30; attempt++) {
+        const countStr = await this.env.ADBLOCK_KV.get(counterKey);
+        completed = parseInt(countStr || "0");
         
-        const chunkDomains = await obj.json() as string[];
-        const id = await engine.updateSingleList(listName, chunkDomains, existingMap[listName]);
-        if (!id) throw new Error(`Failed to update Gateway list: ${listName}`);
-        
-        return id;
-      });
-      
-      listIds.push(listId);
-    }
+        await engine.reportWorkflowProgress(runId, "PROCESSING_QUEUE", completed, total);
+        console.log(`[workflow] Progress: ${completed}/${total} lists updated`);
 
-    // 3. APPLY: Update Policy
-    await step.do('apply-policy', async () => {
-      console.log(`[workflow] Applying policy with ${listIds.length} lists`);
-      await engine.applyFinalPolicy(listIds);
+        if (completed >= total) break;
+        
+        // Wait 1 minute before next poll
+        // (Workflows support waiting, but we do it inside step.do loop here for granularity)
+        await new Promise(r => setTimeout(r, 60000));
+      }
+
+      if (completed < total) {
+        throw new Error(`Queue processing timed out. Only ${completed}/${total} done.`);
+      }
     });
 
-    // 4. CLEANUP: Clear R2 and old lists
+    // 4. AGGREGATE IDS & APPLY POLICY
+    const finalIds = await step.do('apply-policy', async () => {
+      await engine.reportWorkflowProgress(runId, "APPLYING_POLICY");
+      
+      const ids: string[] = [];
+      for (let i = 0; i < mapResult.totalChunks!; i++) {
+        const listName = `${this.env.LIST_PREFIX}${i + 1}`;
+        const id = await this.env.ADBLOCK_KV.get(`${KV_KEYS.LIST_IDS}_${runId}_${listName}`);
+        if (id) ids.push(id);
+      }
+
+      console.log(`[workflow] Applying policy with ${ids.length} lists`);
+      await engine.applyFinalPolicy(ids);
+      return ids;
+    });
+
+    // 5. CLEANUP
     await step.do('cleanup-final', async () => {
-      console.log("[workflow] Finalizing and cleaning up...");
+      await engine.reportWorkflowProgress(runId, "CLEANING_UP");
       
       // Delete obsolete Gateway lists
-      const deletedLists = await engine.cleanupObsoleteLists(listIds.length);
+      const deletedLists = await engine.performCleanup(mapResult.totalChunks!);
       
       // Update persistent state
       await this.env.ADBLOCK_KV.put(KV_KEYS.STATUS, "IDLE");
       await this.env.ADBLOCK_KV.put(KV_KEYS.LAST_RUN, Date.now().toString());
       await this.env.ADBLOCK_KV.put(KV_KEYS.METADATA, JSON.stringify(mapResult.metadata));
 
-      // Cleanup R2 for this run
+      // Cleanup R2 and Run-specific KV keys
       const listR2 = await this.env.SYNC_BUCKET.list({ prefix: runPrefix });
       const keysToDelete = listR2.objects.map(obj => obj.key);
       if (keysToDelete.length > 0) {
         await (this.env.SYNC_BUCKET as any).delete(keysToDelete).catch(() => {
-           // Fallback for environments where bulk delete isn't exposed correctly
            return Promise.all(keysToDelete.map(k => this.env.SYNC_BUCKET.delete(k)));
         });
       }
 
+      // Cleanup temporary KV keys used for this run
+      await this.env.ADBLOCK_KV.delete(`sync_count_${runId}`);
+      for (let i = 0; i < mapResult.totalChunks!; i++) {
+        const listName = `${this.env.LIST_PREFIX}${i + 1}`;
+        await this.env.ADBLOCK_KV.delete(`${KV_KEYS.LIST_IDS}_${runId}_${listName}`);
+      }
+
+      await engine.reportWorkflowProgress(runId, "IDLE");
       console.log(`[workflow] Sync complete. ${mapResult.totalDomains} domains, ${deletedLists} old lists removed.`);
     });
   }

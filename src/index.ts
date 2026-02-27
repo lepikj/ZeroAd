@@ -55,6 +55,27 @@ export default {
   ): Promise<Response> {
     return router.fetch(request, env, ctx);
   },
+
+  /**
+   * Queue Consumer Handler: Executes subrequest-heavy list updates.
+   * Triggered by the AdBlockSyncWorkflow.
+   */
+  async queue(
+    batch: MessageBatch<any>,
+    env: Bindings,
+    ctx: ExecutionContext,
+  ): Promise<void> {
+    const engine = new SyncEngine(env);
+    for (const message of batch.messages) {
+      try {
+        await engine.handleQueueMessage(message.body);
+        message.ack();
+      } catch (e: any) {
+        console.error(`[queue] Message processing failed: ${e.message}`);
+        // Message will be retried automatically if not acked
+      }
+    }
+  },
 };
 
 export { AdBlockSyncWorkflow };

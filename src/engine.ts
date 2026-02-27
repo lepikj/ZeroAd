@@ -143,6 +143,38 @@ export class SyncEngine {
     return toDelete.length;
   }
 
+  /**
+   * Queue Handler: Processes individual list update tasks.
+   * Executed in a fresh invocation with its own subrequest limits.
+   */
+  async handleQueueMessage(msg: { runId: string, listName: string, r2Key: string, existingId?: string }) {
+    console.log(`[queue] Updating list ${msg.listName} for run ${msg.runId}`);
+    
+    const obj = await this.env.SYNC_BUCKET.get(msg.r2Key);
+    if (!obj) throw new Error(`Part missing from R2: ${msg.r2Key}`);
+    
+    const domains = await obj.json() as string[];
+    const id = await this.updateSingleList(msg.listName, domains, msg.existingId);
+    
+    if (id) {
+      // Store the resulting ID in KV for the workflow to aggregate later
+      await this.env.ADBLOCK_KV.put(`${KV_KEYS.LIST_IDS}_${msg.runId}_${msg.listName}`, id);
+      
+      // Increment completion counter
+      const counterKey = `sync_count_${msg.runId}`;
+      const current = await this.env.ADBLOCK_KV.get(counterKey);
+      await this.env.ADBLOCK_KV.put(counterKey, (parseInt(current || "0") + 1).toString());
+    }
+  }
+
+  /**
+   * Utility: Reports workflow status to KV for UI visibility.
+   */
+  async reportWorkflowProgress(runId: string, phase: string, current?: number, total?: number) {
+    const status = { runId, phase, current, total, updatedAt: Date.now() };
+    await this.env.ADBLOCK_KV.put("workflow_progress", JSON.stringify(status));
+  }
+
   // --- LEGACY STATE MACHINE (Maintained for UI compatibility) ---
 
   async processNextStep(
