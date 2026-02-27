@@ -84,7 +84,19 @@ npx wrangler kv:namespace create ADBLOCK_KV
 ```
 Copy the `id` from the output (e.g., `f8b49529...`) and paste it into the `[[kv_namespaces]]` section of your `wrangler.toml`.
 
-### 4. Create an API Token
+### 4. Create the R2 Bucket
+Create the temporary asset storage:
+```bash
+npx wrangler r2 bucket create zero-ad-sync-assets
+```
+
+### 5. Create the Sync Queue
+Create the task queue for Gateway updates:
+```bash
+npx wrangler queues create adblock-sync-tasks
+```
+
+### 6. Create an API Token
 Go to [My Profile > API Tokens](https://dash.cloudflare.com/profile/api-tokens) and create a **Custom Token** with these permissions:
 - **Account** > **Zero Trust** > **Edit**
 - **Account** > **Account Settings** > **Read**
