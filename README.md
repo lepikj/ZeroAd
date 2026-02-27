@@ -41,21 +41,24 @@ This project was inspired by and built upon the logic and research of the follow
 
 ## How It Works
 
-ZeroAd uses **Cloudflare Workflows** to manage the complex synchronization process. When a cron trigger or manual action starts a sync, a workflow is spawned:
+ZeroAd uses a hybrid **Cloudflare Workflow + Queue** architecture to manage the complex synchronization process while strictly adhering to the resource limits of the Cloudflare Free Plan.
 
-1.  **fetch-and-prepare**: Downloads source lists, parses them, and saves the result to R2.
-2.  **update-gateway-lists**: Iteratively updates Cloudflare Gateway lists in the Zero Trust dashboard.
-3.  **apply-policy**: Ensures the DNS firewall policy is using the correct list IDs.
-4.  **cleanup**: Removes obsolete lists and temporary R2 assets.
+When a cron trigger or manual action starts a sync, an orchestrated workflow is spawned:
 
-### Cron Flow & Workflows
+1.  **fetch-and-prepare**: Downloads source lists, parses them, and partitions them into 1,000-item chunks stored in R2.
+2.  **dispatch-tasks**: Sends a batch of update tasks to a **Cloudflare Queue**. This offloads the high-subrequest work of calling the Cloudflare Gateway API to independent Worker invocations.
+3.  **wait-for-queue**: The workflow master durable waits (polls KV) until all distributed queue tasks are confirmed complete.
+4.  **apply-policy**: Aggregates all list IDs and updates the global DNS firewall policy.
+5.  **cleanup**: Removes obsolete Gateway lists and temporary R2 assets.
 
-By using Workflows, the application gains native durability and avoids the "state machine" complexity previously required to stay within Worker resource limits:
+### Limit-Breaking Architecture
 
+By combining Workflows and Queues, the application circumvents several platform constraints:
+
+-   **Subrequest Limits**: Each Queue task runs in its own invocation with a fresh **50-external-subrequest limit**, allowing the system to update 90+ Gateway lists in a single cycle.
 -   **Native Durability**: Workflows automatically handle state persistence and retries if a step fails or is terminated.
--   **CPU Isolation**: Each step in the workflow has its own CPU budget, preventing the "Exceeded CPU" errors common when processing large datasets in a single Worker invocation.
--   **Smart Skip (ETags)**: Before starting a sync, the worker performs a lightweight `HEAD` request to check if the source lists have actually changed. If not, it skips the entire cycle, saving KV writes and API units.
--   **No Concurrency Hacks**: Workflows natively manage instance creation and execution, eliminating the need for manual heartbeat/locking mechanisms.
+-   **CPU Isolation**: Each step and each queue task has its own CPU budget, preventing "Exceeded CPU" errors common when processing large datasets.
+-   **Atomic State**: Uses a presence-based completion check in KV to avoid race conditions and ensure 100% synchronization reliability.
 
 ## Detailed Setup Guide
 
